@@ -109,37 +109,10 @@ export async function getDocument(documentName: string): Promise<FileSearchDocum
   return apiRequest<FileSearchDocument>(`/${documentName}`);
 }
 
-export async function deleteDocument(documentName: string, retries = 10, delayMs = 3000): Promise<void> {
+export async function deleteDocument(documentName: string): Promise<void> {
   // documentName format: fileSearchStores/xxx/documents/yyy
-  // Documents may be in STATE_PENDING_PROCESSING and cannot be deleted until active
-  for (let i = 0; i < retries; i++) {
-    try {
-      // Check state first (optional, for debugging)
-      if (i > 0) {
-        try {
-          const doc = await getDocument(documentName);
-          console.log(`[deleteDocument] State: ${doc.state}, attempt ${i + 1}/${retries}`);
-        } catch {
-          // Ignore, will try delete anyway
-        }
-      }
-      await apiRequest(`/${documentName}`, { method: "DELETE" });
-      console.log(`[deleteDocument] Success after ${i + 1} attempts`);
-      return; // Success
-    } catch (err) {
-      const errStr = String(err);
-      // If "non-empty" or "FAILED_PRECONDITION", wait and retry (document still processing)
-      if (
-        (errStr.includes("non-empty") || errStr.includes("FAILED_PRECONDITION")) &&
-        i < retries - 1
-      ) {
-        console.log(`[deleteDocument] Retrying in ${delayMs}ms... (${i + 1}/${retries})`);
-        await new Promise((r) => setTimeout(r, delayMs));
-        continue;
-      }
-      throw err; // Re-throw if not retryable or no more retries
-    }
-  }
+  // force=true is required to delete documents that already have chunks
+  await apiRequest(`/${documentName}?force=true`, { method: "DELETE" });
 }
 
 // ===== Operations =====
