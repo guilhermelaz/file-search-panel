@@ -21,13 +21,28 @@ export async function DELETE(
       return NextResponse.json({ error: "File not found" }, { status: 404 });
     }
 
-    // Deletar no Google se tiver referência
+    // Deletar no Google PRIMEIRO. Só remove do DB se Google confirmou (ou 404).
     if (file.googleFileId) {
       try {
         console.log("[FILE DELETE] Deleting Google document:", file.googleFileId);
         await deleteDocument(file.googleFileId);
+        console.log("[FILE DELETE] Google document deleted");
       } catch (err) {
-        console.error("[FILE DELETE] Google delete failed (continuing):", err);
+        const errStr = String(err);
+        // Se documento já não existe no Google (404), prosseguir com delete local
+        if (errStr.includes("404") || errStr.includes("NOT_FOUND")) {
+          console.warn("[FILE DELETE] Document not found on Google, removing local ref");
+        } else {
+          // Qualquer outro erro: ABORTAR para evitar disparidade
+          console.error("[FILE DELETE] Google delete FAILED, aborting:", err);
+          return NextResponse.json(
+            {
+              error: "Falha ao deletar no Google. Arquivo NÃO foi removido.",
+              details: errStr,
+            },
+            { status: 500 }
+          );
+        }
       }
     }
 

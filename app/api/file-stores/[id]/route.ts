@@ -21,14 +21,27 @@ export async function DELETE(
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
 
-    // 1. Deletar no Google (force=true remove documentos também)
+    // 1. Deletar no Google PRIMEIRO (force=true remove documentos também)
     if (fileStore.googleCorpusId) {
       try {
         console.log("[FILE-STORE DELETE] Deleting Google store:", fileStore.googleCorpusId);
         await deleteFileSearchStore(fileStore.googleCorpusId);
+        console.log("[FILE-STORE DELETE] Google store deleted");
       } catch (err) {
-        console.error("[FILE-STORE DELETE] Google delete failed (continuing):", err);
-        // Continue mesmo se falhar no Google (pode ter sido deletado manualmente)
+        const errStr = String(err);
+        if (errStr.includes("404") || errStr.includes("NOT_FOUND")) {
+          console.warn("[FILE-STORE DELETE] Store not found on Google, removing local ref");
+        } else {
+          // ABORTAR para evitar disparidade
+          console.error("[FILE-STORE DELETE] Google delete FAILED, aborting:", err);
+          return NextResponse.json(
+            {
+              error: "Falha ao deletar no Google. Store NÃO foi removido.",
+              details: errStr,
+            },
+            { status: 500 }
+          );
+        }
       }
     }
 

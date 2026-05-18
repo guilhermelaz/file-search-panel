@@ -107,9 +107,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       return NextResponse.json({ error: "File content required" }, { status: 400 });
     }
 
-    // Upload para Google File Search
+    // Upload para Google File Search (espera operação completar)
     console.log("[FILES POST] Uploading to Google store:", fileStore.googleCorpusId);
-    let googleDocName: string | null = null;
+    let googleDocName: string;
     try {
       const result = await uploadToFileSearchStore(
         fileStore.googleCorpusId,
@@ -118,9 +118,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         mimeType || "application/octet-stream",
         googleMetadata
       );
-      console.log("[FILES POST] Upload success:", result);
-      // Result is an Operation - the document name will be in metadata after processing
-      googleDocName = result.name || null;
+      googleDocName = result.documentName;
+      console.log("[FILES POST] Document created:", googleDocName);
     } catch (err) {
       console.error("[FILES POST] Upload failed:", err);
       return NextResponse.json(

@@ -105,11 +105,54 @@ export async function deleteDocument(documentName: string): Promise<void> {
   });
 }
 
+// ===== Operations =====
+
+interface Operation {
+  name: string;
+  done?: boolean;
+  error?: { code: number; message: string };
+  response?: { name?: string; [key: string]: unknown };
+  metadata?: Record<string, unknown>;
+}
+
+async function getOperation(operationName: string): Promise<Operation> {
+  // operationName format: "operations/xxx" or full path
+  const path = operationName.startsWith("/") ? operationName : `/${operationName}`;
+  return apiRequest<Operation>(path);
+}
+
+/**
+ * Poll an operation until it completes (or timeout).
+ * Returns the resolved document name when done.
+ */
+async function waitForOperation(
+  operation: Operation,
+  maxWaitMs = 60000,
+  pollIntervalMs = 2000
+): Promise<Operation> {
+  const startedAt = Date.now();
+  let current = operation;
+
+  while (!current.done) {
+    if (Date.now() - startedAt > maxWaitMs) {
+      throw new Error(`Operation ${current.name} timed out after ${maxWaitMs}ms`);
+    }
+    await new Promise((r) => setTimeout(r, pollIntervalMs));
+    current = await getOperation(current.name);
+  }
+
+  if (current.error) {
+    throw new Error(`Operation failed: ${current.error.message}`);
+  }
+
+  return current;
+}
+
 // ===== File Upload =====
 
 /**
  * Upload a file directly to a File Search Store using multipart upload.
- * This combines media upload + import into one call.
+ * Polls the operation until complete and returns the document name.
  */
 export async function uploadToFileSearchStore(
   storeName: string,
@@ -117,7 +160,7 @@ export async function uploadToFileSearchStore(
   fileName: string,
   mimeType: string,
   customMetadata?: CustomMetadata[]
-): Promise<{ name: string }> {
+): Promise<{ documentName: string; operationName: string }> {
   const apiKey = await getApiKey();
   const path = storeName.startsWith("fileSearchStores/") ? storeName : `fileSearchStores/${storeName}`;
 
@@ -169,8 +212,19 @@ export async function uploadToFileSearchStore(
     throw new Error(`Failed to upload bytes: ${uploadResponse.status} ${errText}`);
   }
 
-  const result = await uploadResponse.json();
-  // Result is an Operation object - we just return what we have
-  // The document will be ready after some processing time
-  return result;
+  const operation: Operation = await uploadResponse.json();
+  console.log("[GoogleAPI] Upload operation started:", operation.name);
+
+  // Poll until operation completes to get the actual document name
+  const completed = await waitForOperation(operation);
+  const documentName = completed.response?.name;
+
+  if (!documentName) {
+    throw new Error(
+      `Upload completed but no document name returned: ${JSON.stringify(completed)}`
+    );
+  }
+
+  console.log("[GoogleAPI] Document created:", documentName);
+  return { documentName, operationName: operation.name };
 }
