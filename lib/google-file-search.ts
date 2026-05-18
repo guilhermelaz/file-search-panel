@@ -78,7 +78,7 @@ export async function createFileSearchStore(displayName: string): Promise<FileSe
 
 export async function listFileSearchStores(): Promise<FileSearchStore[]> {
   const result = await apiRequest<{ fileSearchStores?: FileSearchStore[] }>(
-    "/fileSearchStores?pageSize=100"
+    "/fileSearchStores?pageSize=20"
   );
   return result.fileSearchStores || [];
 }
@@ -100,7 +100,7 @@ export async function listDocuments(storeName: string): Promise<FileSearchDocume
     ? storeName
     : `fileSearchStores/${storeName}`;
   const result = await apiRequest<{ documents?: FileSearchDocument[] }>(
-    `/${path}/documents?pageSize=100`
+    `/${path}/documents?pageSize=20`
   );
   return result.documents || [];
 }
@@ -279,6 +279,42 @@ export async function chatWithStores(
     ) || [];
 
   return { text, citations };
+}
+
+// ===== Models =====
+
+export interface GeminiModel {
+  name: string;
+  displayName: string;
+  description?: string;
+  version?: string;
+}
+
+export async function listGeminiModels(): Promise<GeminiModel[]> {
+  const apiKey = getApiKey();
+  const url = `${BASE_URL}/models?key=${apiKey}&pageSize=50`;
+  const res = await fetch(url);
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Failed to list models: ${res.status} ${err}`);
+  }
+  const data = await res.json();
+  const models: GeminiModel[] = data.models || [];
+  // Filter to Gemini 2.5/3.x generation models supporting generateContent
+  return models
+    .filter((m: GeminiModel) => {
+      const name = m.name.toLowerCase();
+      // Exclude embedding, tuning, aqa, vision models
+      if (name.includes("embedding") || name.includes("aqa") || name.includes("tuning")) return false;
+      // Include flash/pro models
+      return name.includes("gemini-2.5") || name.includes("gemini-3.1") || name.includes("gemini-3");
+    })
+    .map((m: GeminiModel) => ({
+      name: m.name.replace("models/", ""),
+      displayName: m.displayName || m.name.replace("models/", ""),
+      description: m.description,
+      version: m.version,
+    }));
 }
 
 // ===== Health check =====

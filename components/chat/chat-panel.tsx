@@ -19,6 +19,12 @@ interface Message {
   citations?: Array<{ uri?: string; title?: string; text?: string }>;
 }
 
+interface GeminiModel {
+  name: string;
+  displayName: string;
+  description?: string;
+}
+
 interface ChatPanelProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -26,16 +32,27 @@ interface ChatPanelProps {
   storeName: string;
 }
 
-const MODELS = [
-  { id: "gemini-2.5-flash", label: "Gemini 2.5 Flash (rápido)" },
-  { id: "gemini-2.5-pro", label: "Gemini 2.5 Pro (preciso)" },
-];
-
 export function ChatPanel({ open, onOpenChange, storeId, storeName }: ChatPanelProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
-  const [model, setModel] = useState(MODELS[0].id);
+  const [models, setModels] = useState<GeminiModel[]>([]);
+  const [model, setModel] = useState("gemini-2.5-flash");
+  const [loadingModels, setLoadingModels] = useState(true);
   const [sending, setSending] = useState(false);
+
+  // Fetch available models on mount
+  useEffect(() => {
+    fetch("/api/models")
+      .then((r) => r.json())
+      .then((data) => {
+        if (Array.isArray(data) && data.length > 0) {
+          setModels(data);
+          setModel(data[0].name);
+        }
+      })
+      .catch((err) => console.error("Failed to load models:", err))
+      .finally(() => setLoadingModels(false));
+  }, []);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -100,13 +117,19 @@ export function ChatPanel({ open, onOpenChange, storeId, storeName }: ChatPanelP
               value={model}
               onChange={(e) => setModel(e.target.value)}
               className="w-full bg-background border border-input rounded-md px-3 py-2 text-sm"
-              disabled={sending}
+              disabled={sending || loadingModels}
             >
-              {MODELS.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.label}
-                </option>
-              ))}
+              {loadingModels ? (
+                <option>Carregando modelos...</option>
+              ) : models.length === 0 ? (
+                <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+              ) : (
+                models.map((m) => (
+                  <option key={m.name} value={m.name}>
+                    {m.displayName}
+                  </option>
+                ))
+              )}
             </select>
           </div>
         </SheetHeader>

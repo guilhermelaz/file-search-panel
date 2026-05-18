@@ -72,6 +72,7 @@ docker run -d -p 3000:3000 --env-file .env --name rag-manager --restart unless-s
 - `DELETE /api/files/:id?storeId=xxx` — deleta documento
 - `POST /api/chat` — chat RAG via `generateContent` + tool `file_search`
 - `GET  /api/health` — testa conexão com a API
+- `GET  /api/models` — lista modelos Gemini disponíveis
 
 ## Observações
 
