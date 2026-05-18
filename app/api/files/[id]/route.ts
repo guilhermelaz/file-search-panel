@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { isAuthenticated } from "@/lib/auth";
+import { deleteDocument } from "@/lib/google-file-search";
 
-// DELETE /api/files/[id] - Deletar arquivo
+// DELETE /api/files/[id] - Deletar arquivo no Google + DB
 export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -15,32 +16,34 @@ export async function DELETE(
 
     const { id } = await params;
 
-    // Buscar arquivo para obter googleFileId
-    const file = await prisma.file.findUnique({
-      where: { id },
-    });
-
+    const file = await prisma.file.findUnique({ where: { id } });
     if (!file) {
       return NextResponse.json({ error: "File not found" }, { status: 404 });
     }
 
-    // Deletar do banco
-    await prisma.file.delete({
-      where: { id },
-    });
+    // Deletar no Google se tiver referência
+    if (file.googleFileId) {
+      try {
+        console.log("[FILE DELETE] Deleting Google document:", file.googleFileId);
+        await deleteDocument(file.googleFileId);
+      } catch (err) {
+        console.error("[FILE DELETE] Google delete failed (continuing):", err);
+      }
+    }
 
-    // TODO: Deletar do Google File Search quando tiver googleFileId
+    await prisma.file.delete({ where: { id } });
 
     return NextResponse.json({ success: true });
   } catch (error) {
+    console.error("[FILE DELETE]", error);
     return NextResponse.json(
-      { error: "Failed to delete file" },
+      { error: "Failed to delete file", details: String(error) },
       { status: 500 }
     );
   }
 }
 
-// PATCH /api/files/[id] - Atualizar arquivo (metadados, mover pasta)
+// PATCH /api/files/[id] - Atualizar metadados locais
 export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -67,8 +70,9 @@ export async function PATCH(
 
     return NextResponse.json(file);
   } catch (error) {
+    console.error("[FILE PATCH]", error);
     return NextResponse.json(
-      { error: "Failed to update file" },
+      { error: "Failed to update file", details: String(error) },
       { status: 500 }
     );
   }

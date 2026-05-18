@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { isAuthenticated } from "@/lib/auth";
+import { deleteFileSearchStore } from "@/lib/google-file-search";
 
-// DELETE /api/file-stores/[id] - Deletar File Store
+// DELETE /api/file-stores/[id] - Deletar File Store do Google + DB
 export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -15,17 +16,30 @@ export async function DELETE(
 
     const { id } = await params;
 
-    // Deletar do banco (cascade vai remover pastas e arquivos)
-    await prisma.fileStore.delete({
-      where: { id },
-    });
+    const fileStore = await prisma.fileStore.findUnique({ where: { id } });
+    if (!fileStore) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
 
-    // TODO: Deletar Corpus do Google File Search quando tiver API key
+    // 1. Deletar no Google (force=true remove documentos também)
+    if (fileStore.googleCorpusId) {
+      try {
+        console.log("[FILE-STORE DELETE] Deleting Google store:", fileStore.googleCorpusId);
+        await deleteFileSearchStore(fileStore.googleCorpusId);
+      } catch (err) {
+        console.error("[FILE-STORE DELETE] Google delete failed (continuing):", err);
+        // Continue mesmo se falhar no Google (pode ter sido deletado manualmente)
+      }
+    }
+
+    // 2. Deletar local (cascade remove pastas e arquivos)
+    await prisma.fileStore.delete({ where: { id } });
 
     return NextResponse.json({ success: true });
   } catch (error) {
+    console.error("[FILE-STORE DELETE]", error);
     return NextResponse.json(
-      { error: "Failed to delete file store" },
+      { error: "Failed to delete file store", details: String(error) },
       { status: 500 }
     );
   }
@@ -54,16 +68,14 @@ export async function GET(
     });
 
     if (!fileStore) {
-      return NextResponse.json(
-        { error: "File store not found" },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: "File store not found" }, { status: 404 });
     }
 
     return NextResponse.json(fileStore);
   } catch (error) {
+    console.error("[FILE-STORE GET]", error);
     return NextResponse.json(
-      { error: "Failed to fetch file store" },
+      { error: "Failed to fetch file store", details: String(error) },
       { status: 500 }
     );
   }
