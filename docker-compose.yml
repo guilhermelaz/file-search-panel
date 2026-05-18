@@ -1,21 +1,15 @@
-version: '3.8'
-
 services:
   app:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: rag-manager
     restart: unless-stopped
-    ports:
-      - "3000:3000"
     environment:
       - NODE_ENV=production
       - DATABASE_URL=file:./data/dev.db
       - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
     volumes:
-      # Persist SQLite database
       - ./data:/app/data
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/login"]
@@ -23,3 +17,15 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+    networks:
+      - default
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.rag-app.rule=Host(`${DOMAIN:-rag.local}`)
+      - traefik.http.routers.rag-app.entrypoints=web
+      - traefik.http.services.rag-app.loadbalancer.server.port=3000
+
+networks:
+  default:
+    external: true
+    name: traefik
