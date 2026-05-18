@@ -105,11 +105,26 @@ export async function listDocuments(storeName: string): Promise<FileSearchDocume
   return result.documents || [];
 }
 
-export async function deleteDocument(documentName: string, retries = 3, delayMs = 2000): Promise<void> {
+export async function getDocument(documentName: string): Promise<FileSearchDocument> {
+  return apiRequest<FileSearchDocument>(`/${documentName}`);
+}
+
+export async function deleteDocument(documentName: string, retries = 10, delayMs = 3000): Promise<void> {
   // documentName format: fileSearchStores/xxx/documents/yyy
+  // Documents may be in STATE_PENDING_PROCESSING and cannot be deleted until active
   for (let i = 0; i < retries; i++) {
     try {
+      // Check state first (optional, for debugging)
+      if (i > 0) {
+        try {
+          const doc = await getDocument(documentName);
+          console.log(`[deleteDocument] State: ${doc.state}, attempt ${i + 1}/${retries}`);
+        } catch {
+          // Ignore, will try delete anyway
+        }
+      }
       await apiRequest(`/${documentName}`, { method: "DELETE" });
+      console.log(`[deleteDocument] Success after ${i + 1} attempts`);
       return; // Success
     } catch (err) {
       const errStr = String(err);
