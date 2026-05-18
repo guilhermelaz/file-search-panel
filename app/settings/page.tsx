@@ -1,14 +1,14 @@
 import { requireAuth } from "@/lib/auth";
-import { FileStoresList } from "@/components/file-store/file-stores-list";
 import { AppSidebar } from "@/components/sidebar/app-sidebar";
+import { SettingsForm } from "@/components/settings/settings-form";
 
-export default async function HomePage() {
+export default async function SettingsPage() {
   await requireAuth();
 
   return (
     <AppSidebar>
       <div className="p-6">
-        <FileStoresList />
+        <SettingsForm />
       </div>
     </AppSidebar>
   );

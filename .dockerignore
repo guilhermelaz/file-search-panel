@@ -1,0 +1,15 @@
+Dockerfile
+.dockerignore
+docker-compose.yml
+node_modules
+npm-debug.log
+README.md
+.env
+.env.local
+.next
+git
+.github
+.vscode
+*.md
+prisma/dev.db
+prisma/dev.db-journal

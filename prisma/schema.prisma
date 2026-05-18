@@ -1,0 +1,65 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model FileStore {
+  id              String   @id @default(cuid())
+  name            String
+  description     String?
+  googleCorpusId  String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  folders         Folder[]
+  files           File[]
+}
+
+model Folder {
+  id            String   @id @default(cuid())
+  name          String
+  path          String
+  fileStoreId   String
+  parentId      String?
+  createdAt     DateTime @default(now())
+  
+  fileStore     FileStore @relation(fields: [fileStoreId], references: [id], onDelete: Cascade)
+  parent        Folder?   @relation("FolderToFolder", fields: [parentId], references: [id], onDelete: Cascade)
+  children      Folder[]  @relation("FolderToFolder")
+  files         File[]
+  
+  @@index([fileStoreId])
+  @@index([parentId])
+}
+
+model File {
+  id              String   @id @default(cuid())
+  name            String
+  size            Int
+  mimeType        String
+  folderId        String?
+  fileStoreId     String
+  googleFileId    String?
+  metadataJson    String?
+  status          String   @default("pending")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  folder          Folder?    @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  fileStore       FileStore  @relation(fields: [fileStoreId], references: [id], onDelete: Cascade)
+  
+  @@index([fileStoreId])
+  @@index([folderId])
+}
+
+model Settings {
+  id              String   @id @default(cuid())
+  googleApiKey    String?
+  googleProjectId String?
+  defaultRegion   String   @default("us-central1")
+  updatedAt       DateTime @updatedAt
+}
