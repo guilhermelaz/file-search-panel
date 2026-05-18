@@ -1,500 +1,351 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbSeparator } from "@/components/ui/breadcrumb";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { toast } from "sonner";
-import { ArrowLeft, ChevronRight, FileText, Folder, FolderPlus, Home, Trash2, Upload, FileUp, Plus, X } from "lucide-react";
+import {
+  Upload,
+  Trash2,
+  FileIcon,
+  Plus,
+  X,
+  ArrowLeft,
+  MessageSquare,
+  RefreshCw,
+} from "lucide-react";
+import {
+  shortDocId,
+  formatBytes,
+  formatDate,
+} from "@/lib/google-utils";
+import { ChatPanel } from "@/components/chat/chat-panel";
 
-interface Folder {
-  id: string;
+interface Document {
   name: string;
-  path: string;
-  parentId: string | null;
-  fileStoreId: string;
-  createdAt: string;
-  _count?: {
-    files: number;
-  };
+  displayName?: string;
+  createTime?: string;
+  state?: string;
+  sizeBytes?: string;
+  mimeType?: string;
+  customMetadata?: Array<{ key: string; stringValue?: string; numericValue?: number }>;
 }
 
-interface FileItem {
-  id: string;
+interface StoreInfo {
   name: string;
-  size: number;
-  mimeType: string;
-  folderId: string | null;
-  fileStoreId: string;
-  metadataJson: string | null;
-  status: string;
-  createdAt: string;
+  displayName: string;
+  activeDocumentsCount?: string;
+  sizeBytes?: string;
 }
 
-interface FileStore {
-  id: string;
-  name: string;
+interface FileManagerProps {
+  storeId: string; // short id, ex: "teste-xxx"
 }
 
-interface MetadataField {
-  key: string;
-  value: string;
-}
-
-export function FileManager({ fileStoreId }: { fileStoreId: string }) {
-  const [fileStore, setFileStore] = useState<FileStore | null>(null);
-  const [folders, setFolders] = useState<Folder[]>([]);
-  const [files, setFiles] = useState<FileItem[]>([]);
-  const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
-  const [breadcrumb, setBreadcrumb] = useState<Folder[]>([]);
+export function FileManager({ storeId }: FileManagerProps) {
+  const [storeInfo, setStoreInfo] = useState<StoreInfo | null>(null);
+  const [docs, setDocs] = useState<Document[]>([]);
   const [loading, setLoading] = useState(true);
-  const [createFolderOpen, setCreateFolderOpen] = useState(false);
-  const [newFolderName, setNewFolderName] = useState("");
   const [uploadOpen, setUploadOpen] = useState(false);
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [metadataFields, setMetadataFields] = useState<MetadataField[]>([{ key: "", value: "" }]);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [file, setFile] = useState<File | null>(null);
+  const [metadata, setMetadata] = useState<Array<{ key: string; value: string }>>([
+    { key: "", value: "" },
+  ]);
+  const [uploading, setUploading] = useState(false);
 
-  async function fetchFileStore() {
+  const fetchAll = useCallback(async () => {
+    setLoading(true);
     try {
-      const response = await fetch(`/api/file-stores/${fileStoreId}`);
-      if (response.ok) {
-        const data = await response.json();
-        setFileStore(data);
-      }
-    } catch (error) {
-      console.error("Erro ao buscar file store:", error);
+      const [storeRes, docsRes] = await Promise.all([
+        fetch(`/api/file-stores/${storeId}`),
+        fetch(`/api/files?storeId=${storeId}`),
+      ]);
+      if (storeRes.ok) setStoreInfo(await storeRes.json());
+      if (docsRes.ok) setDocs(await docsRes.json());
+    } catch (err) {
+      toast.error("Erro ao carregar: " + String(err));
+    } finally {
+      setLoading(false);
     }
-  }
-
-  async function fetchFolders() {
-    try {
-      const response = await fetch(`/api/folders?fileStoreId=${fileStoreId}`);
-      if (response.ok) {
-        const data = await response.json();
-        setFolders(data);
-      }
-    } catch (error) {
-      console.error("Erro ao buscar pastas:", error);
-    }
-  }
-
-  async function fetchFiles() {
-    try {
-      const folderParam = currentFolderId ? `&folderId=${currentFolderId}` : "&folderId=null";
-      const response = await fetch(`/api/files?fileStoreId=${fileStoreId}${folderParam}`);
-      if (response.ok) {
-        const data = await response.json();
-        setFiles(data);
-      }
-    } catch (error) {
-      console.error("Erro ao buscar arquivos:", error);
-    }
-  }
-
-  async function fetchBreadcrumb() {
-    if (!currentFolderId) {
-      setBreadcrumb([]);
-      return;
-    }
-
-    const path: Folder[] = [];
-    let current = folders.find((f) => f.id === currentFolderId);
-
-    while (current) {
-      path.unshift(current);
-      current = folders.find((f) => f.id === current?.parentId);
-    }
-
-    setBreadcrumb(path);
-  }
+  }, [storeId]);
 
   useEffect(() => {
-    Promise.all([fetchFileStore(), fetchFolders()]).then(() => setLoading(false));
-  }, [fileStoreId]);
+    fetchAll();
+  }, [fetchAll]);
 
-  useEffect(() => {
-    fetchFiles();
-    fetchBreadcrumb();
-  }, [currentFolderId, folders]);
-
-  async function handleCreateFolder(e: React.FormEvent) {
-    e.preventDefault();
-
-    try {
-      const response = await fetch("/api/folders", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: newFolderName,
-          fileStoreId,
-          parentId: currentFolderId,
-        }),
-      });
-
-      if (response.ok) {
-        toast.success("Pasta criada com sucesso!");
-        setCreateFolderOpen(false);
-        setNewFolderName("");
-        fetchFolders();
-      } else {
-        toast.error("Erro ao criar pasta");
-      }
-    } catch (error) {
-      toast.error("Erro ao criar pasta");
-    }
+  function addMetaField() {
+    setMetadata([...metadata, { key: "", value: "" }]);
   }
-
-  async function handleDeleteFolder(id: string) {
-    if (!confirm("Tem certeza que deseja deletar esta pasta? Todos os arquivos e subpastas serão perdidos.")) {
-      return;
-    }
-
-    try {
-      const response = await fetch(`/api/folders/${id}`, {
-        method: "DELETE",
-      });
-
-      if (response.ok) {
-        toast.success("Pasta deletada com sucesso!");
-        fetchFolders();
-      } else {
-        toast.error("Erro ao deletar pasta");
-      }
-    } catch (error) {
-      toast.error("Erro ao deletar pasta");
-    }
+  function removeMetaField(i: number) {
+    setMetadata(metadata.filter((_, idx) => idx !== i));
   }
-
-  async function handleDeleteFile(id: string) {
-    if (!confirm("Tem certeza que deseja deletar este arquivo?")) {
-      return;
-    }
-
-    try {
-      const response = await fetch(`/api/files/${id}`, {
-        method: "DELETE",
-      });
-
-      if (response.ok) {
-        toast.success("Arquivo deletado com sucesso!");
-        fetchFiles();
-      } else {
-        toast.error("Erro ao deletar arquivo");
-      }
-    } catch (error) {
-      toast.error("Erro ao deletar arquivo");
-    }
-  }
-
-  function addMetadataField() {
-    setMetadataFields([...metadataFields, { key: "", value: "" }]);
-  }
-
-  function removeMetadataField(index: number) {
-    setMetadataFields(metadataFields.filter((_, i) => i !== index));
-  }
-
-  function updateMetadataField(index: number, field: "key" | "value", value: string) {
-    const newFields = [...metadataFields];
-    newFields[index][field] = value;
-    setMetadataFields(newFields);
-  }
-
-  function buildMetadataJson(): string | null {
-    const validFields = metadataFields.filter(f => f.key.trim() !== "");
-    if (validFields.length === 0) return null;
-    
-    const metadata: Record<string, string> = {};
-    validFields.forEach(f => {
-      metadata[f.key] = f.value;
-    });
-    
-    return JSON.stringify(metadata);
+  function updateMetaField(i: number, field: "key" | "value", v: string) {
+    setMetadata(metadata.map((m, idx) => (idx === i ? { ...m, [field]: v } : m)));
   }
 
   async function handleUpload(e: React.FormEvent) {
     e.preventDefault();
-    if (!selectedFile) return;
+    if (!file) return;
+    setUploading(true);
+    try {
+      // Read as base64
+      const buffer = await file.arrayBuffer();
+      const b64 = Buffer.from(buffer).toString("base64");
 
-    const reader = new FileReader();
-    reader.onload = async () => {
-      try {
-        const base64 = reader.result?.toString().split(",")[1];
-        const metadataJson = buildMetadataJson();
+      const meta: Record<string, string> = {};
+      metadata.forEach((m) => {
+        if (m.key && m.value) meta[m.key] = m.value;
+      });
 
-        const response = await fetch("/api/files", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            name: selectedFile.name,
-            size: selectedFile.size,
-            mimeType: selectedFile.type,
-            folderId: currentFolderId,
-            fileStoreId,
-            metadataJson: metadataJson,
-            content: base64,
-          }),
-        });
+      const res = await fetch("/api/files", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          storeId,
+          name: file.name,
+          mimeType: file.type || "application/octet-stream",
+          content: b64,
+          metadata: Object.keys(meta).length > 0 ? meta : undefined,
+        }),
+      });
 
-        if (response.ok) {
-          toast.success("Arquivo enviado com sucesso!");
-          setUploadOpen(false);
-          setSelectedFile(null);
-          setMetadataFields([{ key: "", value: "" }]);
-          fetchFiles();
-        } else {
-          toast.error("Erro ao enviar arquivo");
-        }
-      } catch (error) {
-        toast.error("Erro ao enviar arquivo");
+      if (!res.ok) {
+        const err = await res.text();
+        throw new Error(err);
       }
-    };
-    reader.readAsDataURL(selectedFile);
+      toast.success("Arquivo enviado com sucesso!");
+      setUploadOpen(false);
+      setFile(null);
+      setMetadata([{ key: "", value: "" }]);
+      fetchAll();
+    } catch (err) {
+      toast.error("Erro no upload: " + String(err));
+    } finally {
+      setUploading(false);
+    }
   }
 
-  const currentFolders = folders.filter((f) => f.parentId === currentFolderId);
-
-  function formatFileSize(bytes: number): string {
-    if (bytes === 0) return "0 B";
-    const k = 1024;
-    const sizes = ["B", "KB", "MB", "GB"];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
-  }
-
-  if (loading) {
-    return (
-      <div className="p-6">
-        <div className="h-8 w-64 bg-muted rounded animate-pulse mb-6" />
-        <div className="space-y-4">
-          {[1, 2, 3].map((i) => (
-            <div key={i} className="h-12 bg-muted rounded animate-pulse" />
-          ))}
-        </div>
-      </div>
-    );
+  async function handleDelete(doc: Document) {
+    if (!confirm(`Deletar "${doc.displayName || shortDocId(doc.name)}"?`)) return;
+    try {
+      const docId = shortDocId(doc.name);
+      const res = await fetch(`/api/files/${docId}?storeId=${storeId}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error(await res.text());
+      toast.success("Arquivo deletado!");
+      fetchAll();
+    } catch (err) {
+      toast.error("Erro ao deletar: " + String(err));
+    }
   }
 
   return (
-    <div className="p-6">
-      <div className="flex items-center gap-4 mb-6">
-        <Button variant="outline" size="icon" onClick={() => window.location.href = "/"}>
-          <ArrowLeft className="h-4 w-4" />
-        </Button>
-        <div>
-          <h1 className="text-2xl font-bold">{fileStore?.name || "File Store"}</h1>
-          <p className="text-sm text-muted-foreground">ID: {fileStoreId}</p>
+    <div className="p-6 space-y-6">
+      <div className="flex items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => (window.location.href = "/")}
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </Button>
+          <div>
+            <h1 className="text-2xl font-bold">{storeInfo?.displayName || storeId}</h1>
+            <p className="text-xs text-muted-foreground font-mono">
+              {storeInfo?.name || `fileSearchStores/${storeId}`}
+            </p>
+          </div>
         </div>
-      </div>
-
-      <Breadcrumb className="mb-6">
-        <BreadcrumbList>
-          <BreadcrumbItem>
-            <BreadcrumbLink onClick={() => setCurrentFolderId(null)} className="cursor-pointer">
-              <Home className="h-4 w-4 mr-1" />
-              Raiz
-            </BreadcrumbLink>
-          </BreadcrumbItem>
-          {breadcrumb.map((folder) => (
-            <BreadcrumbItem key={folder.id}>
-              <BreadcrumbSeparator>
-                <ChevronRight className="h-4 w-4" />
-              </BreadcrumbSeparator>
-              <BreadcrumbLink onClick={() => setCurrentFolderId(folder.id)} className="cursor-pointer">
-                {folder.name}
-              </BreadcrumbLink>
-            </BreadcrumbItem>
-          ))}
-        </BreadcrumbList>
-      </Breadcrumb>
-
-      <div className="flex gap-2 mb-6">
-        <Dialog open={createFolderOpen} onOpenChange={setCreateFolderOpen}>
-          <DialogTrigger
-            render={
-              <Button variant="outline">
-                <FolderPlus className="mr-2 h-4 w-4" />
-                Nova Pasta
-              </Button>
-            }
-          />
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Criar Pasta</DialogTitle>
-              <DialogDescription>Crie uma nova pasta neste diretório</DialogDescription>
-            </DialogHeader>
-            <form onSubmit={handleCreateFolder}>
-              <div className="space-y-4 py-4">
-                <div className="space-y-2">
-                  <Label htmlFor="folderName">Nome da Pasta</Label>
-                  <Input
-                    id="folderName"
-                    value={newFolderName}
-                    onChange={(e) => setNewFolderName(e.target.value)}
-                    placeholder="Minha Pasta"
-                    required
-                  />
-                </div>
-              </div>
-              <DialogFooter>
-                <Button type="button" variant="outline" onClick={() => setCreateFolderOpen(false)}>
-                  Cancelar
+        <div className="flex gap-2">
+          <Button variant="outline" size="icon" onClick={fetchAll} title="Atualizar">
+            <RefreshCw className="h-4 w-4" />
+          </Button>
+          <Button variant="outline" onClick={() => setChatOpen(true)}>
+            <MessageSquare className="mr-2 h-4 w-4" />
+            Chat
+          </Button>
+          <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
+            <DialogTrigger
+              render={
+                <Button>
+                  <Upload className="mr-2 h-4 w-4" />
+                  Upload
                 </Button>
-                <Button type="submit">Criar</Button>
-              </DialogFooter>
-            </form>
-          </DialogContent>
-        </Dialog>
-
-        <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
-          <DialogTrigger
-            render={
-              <Button>
-                <Upload className="mr-2 h-4 w-4" />
-                Upload
-              </Button>
-            }
-          />
-          <DialogContent className="max-w-lg">
-            <DialogHeader>
-              <DialogTitle>Enviar Arquivo</DialogTitle>
-              <DialogDescription>Envie um arquivo para este diretório</DialogDescription>
-            </DialogHeader>
-            <form onSubmit={handleUpload}>
-              <div className="space-y-4 py-4">
-                <div className="space-y-2">
-                  <Label htmlFor="file">Arquivo</Label>
-                  <Input
-                    id="file"
-                    type="file"
-                    onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
-                    required
-                  />
-                </div>
-                
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <Label>Metadados (opcional)</Label>
-                    <Button type="button" variant="ghost" size="sm" onClick={addMetadataField}>
-                      <Plus className="h-4 w-4 mr-1" />
-                      Adicionar campo
-                    </Button>
-                  </div>
-                  
+              }
+            />
+            <DialogContent className="max-w-lg">
+              <DialogHeader>
+                <DialogTitle>Upload de arquivo</DialogTitle>
+                <DialogDescription>
+                  O arquivo será enviado direto ao Google File Search com seus metadados.
+                </DialogDescription>
+              </DialogHeader>
+              <form onSubmit={handleUpload}>
+                <div className="space-y-4 py-4">
                   <div className="space-y-2">
-                    {metadataFields.map((field, index) => (
-                      <div key={index} className="flex gap-2 items-start">
+                    <Label htmlFor="file">Arquivo</Label>
+                    <Input
+                      id="file"
+                      type="file"
+                      onChange={(e) => setFile(e.target.files?.[0] || null)}
+                      required
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <Label>Metadados (chave/valor)</Label>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={addMetaField}
+                      >
+                        <Plus className="h-3 w-3 mr-1" /> Adicionar
+                      </Button>
+                    </div>
+                    {metadata.map((m, i) => (
+                      <div key={i} className="flex gap-2">
                         <Input
-                          placeholder="Campo (ex: autor)"
-                          value={field.key}
-                          onChange={(e) => updateMetadataField(index, "key", e.target.value)}
-                          className="flex-1"
+                          placeholder="chave"
+                          value={m.key}
+                          onChange={(e) => updateMetaField(i, "key", e.target.value)}
                         />
                         <Input
-                          placeholder="Valor (ex: John)"
-                          value={field.value}
-                          onChange={(e) => updateMetadataField(index, "value", e.target.value)}
-                          className="flex-1"
+                          placeholder="valor"
+                          value={m.value}
+                          onChange={(e) => updateMetaField(i, "value", e.target.value)}
                         />
-                        {metadataFields.length > 1 && (
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => removeMetadataField(index)}
-                          >
-                            <X className="h-4 w-4" />
-                          </Button>
-                        )}
+                        <Button
+                          type="button"
+                          size="icon"
+                          variant="ghost"
+                          onClick={() => removeMetaField(i)}
+                        >
+                          <X className="h-4 w-4" />
+                        </Button>
                       </div>
                     ))}
                   </div>
                 </div>
-              </div>
-              <DialogFooter>
-                <Button type="button" variant="outline" onClick={() => setUploadOpen(false)}>
-                  Cancelar
-                </Button>
-                <Button type="submit" disabled={!selectedFile}>
-                  Enviar
-                </Button>
-              </DialogFooter>
-            </form>
-          </DialogContent>
-        </Dialog>
+                <DialogFooter>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setUploadOpen(false)}
+                    disabled={uploading}
+                  >
+                    Cancelar
+                  </Button>
+                  <Button type="submit" disabled={uploading || !file}>
+                    {uploading ? "Enviando..." : "Enviar"}
+                  </Button>
+                </DialogFooter>
+              </form>
+            </DialogContent>
+          </Dialog>
+        </div>
       </div>
 
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Nome</TableHead>
-            <TableHead>Tamanho</TableHead>
-            <TableHead>Tipo</TableHead>
-            <TableHead>Data</TableHead>
-            <TableHead className="w-16"></TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {currentFolders.map((folder) => (
-            <TableRow key={folder.id} className="cursor-pointer hover:bg-muted/50">
-              <TableCell onClick={() => setCurrentFolderId(folder.id)}>
-                <div className="flex items-center gap-2">
-                  <Folder className="h-4 w-4 text-primary" />
-                  <span>{folder.name}</span>
-                </div>
-              </TableCell>
-              <TableCell onClick={() => setCurrentFolderId(folder.id)}>-</TableCell>
-              <TableCell onClick={() => setCurrentFolderId(folder.id)}>Pasta</TableCell>
-              <TableCell onClick={() => setCurrentFolderId(folder.id)}>
-                {new Date(folder.createdAt).toLocaleDateString("pt-BR")}
-              </TableCell>
-              <TableCell>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => handleDeleteFolder(folder.id)}
-                >
-                  <Trash2 className="h-4 w-4 text-destructive" />
-                </Button>
-              </TableCell>
-            </TableRow>
+      {loading ? (
+        <div className="space-y-2">
+          {[1, 2, 3].map((i) => (
+            <div key={i} className="h-12 bg-muted rounded animate-pulse" />
           ))}
-          {files.map((file) => (
-            <TableRow key={file.id}>
-              <TableCell>
-                <div className="flex items-center gap-2">
-                  <FileText className="h-4 w-4 text-muted-foreground" />
-                  <span>{file.name}</span>
-                </div>
-              </TableCell>
-              <TableCell>{formatFileSize(file.size)}</TableCell>
-              <TableCell>{file.mimeType}</TableCell>
-              <TableCell>{new Date(file.createdAt).toLocaleDateString("pt-BR")}</TableCell>
-              <TableCell>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => handleDeleteFile(file.id)}
-                >
-                  <Trash2 className="h-4 w-4 text-destructive" />
-                </Button>
-              </TableCell>
-            </TableRow>
-          ))}
-          {currentFolders.length === 0 && files.length === 0 && (
+        </div>
+      ) : docs.length === 0 ? (
+        <div className="border border-dashed rounded-lg py-16 flex flex-col items-center justify-center text-muted-foreground">
+          <FileIcon className="h-10 w-10 mb-3" />
+          <p>Nenhum documento no store.</p>
+          <p className="text-sm">Use &quot;Upload&quot; para adicionar arquivos.</p>
+        </div>
+      ) : (
+        <Table>
+          <TableHeader>
             <TableRow>
-              <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
-                <FileUp className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                <p>Nenhum arquivo ou pasta neste diretório</p>
-                <p className="text-sm">Use "Nova Pasta" ou "Upload" para adicionar conteúdo</p>
-              </TableCell>
+              <TableHead>Nome</TableHead>
+              <TableHead>Tamanho</TableHead>
+              <TableHead>Tipo</TableHead>
+              <TableHead>Metadados</TableHead>
+              <TableHead>Criado</TableHead>
+              <TableHead className="w-12"></TableHead>
             </TableRow>
-          )}
-        </TableBody>
-      </Table>
+          </TableHeader>
+          <TableBody>
+            {docs.map((doc) => (
+              <TableRow key={doc.name}>
+                <TableCell className="font-medium">
+                  <div className="flex items-center gap-2">
+                    <FileIcon className="h-4 w-4 text-muted-foreground" />
+                    {doc.displayName || shortDocId(doc.name)}
+                  </div>
+                </TableCell>
+                <TableCell>{formatBytes(doc.sizeBytes)}</TableCell>
+                <TableCell className="text-xs text-muted-foreground">
+                  {doc.mimeType || "—"}
+                </TableCell>
+                <TableCell className="text-xs">
+                  {doc.customMetadata && doc.customMetadata.length > 0 ? (
+                    <div className="flex gap-1 flex-wrap max-w-xs">
+                      {doc.customMetadata.map((m, i) => (
+                        <span
+                          key={i}
+                          className="bg-muted px-1.5 py-0.5 rounded text-[10px]"
+                        >
+                          {m.key}={m.stringValue ?? m.numericValue}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <span className="text-muted-foreground">—</span>
+                  )}
+                </TableCell>
+                <TableCell className="text-xs text-muted-foreground">
+                  {formatDate(doc.createTime)}
+                </TableCell>
+                <TableCell>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8"
+                    onClick={() => handleDelete(doc)}
+                  >
+                    <Trash2 className="h-4 w-4 text-destructive" />
+                  </Button>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+
+      <ChatPanel
+        open={chatOpen}
+        onOpenChange={setChatOpen}
+        storeId={storeId}
+        storeName={storeInfo?.displayName || storeId}
+      />
     </div>
   );
 }

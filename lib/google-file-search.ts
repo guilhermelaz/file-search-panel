@@ -1,5 +1,3 @@
-import { prisma } from "./prisma";
-
 const BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 const UPLOAD_URL = "https://generativelanguage.googleapis.com/upload/v1beta";
 
@@ -18,6 +16,9 @@ export interface FileSearchDocument {
   displayName?: string;
   createTime?: string;
   updateTime?: string;
+  state?: string;
+  sizeBytes?: string;
+  mimeType?: string;
   customMetadata?: Array<{ key: string; stringValue?: string; numericValue?: number }>;
 }
 
@@ -27,20 +28,24 @@ export interface CustomMetadata {
   numericValue?: number;
 }
 
-async function getApiKey(): Promise<string> {
-  const settings = await prisma.settings.findFirst();
-  const apiKey = settings?.googleApiKey || process.env.GOOGLE_API_KEY;
+interface Operation {
+  name: string;
+  done?: boolean;
+  error?: { code: number; message: string };
+  response?: { name?: string; [key: string]: unknown };
+  metadata?: Record<string, unknown>;
+}
+
+function getApiKey(): string {
+  const apiKey = process.env.GOOGLE_API_KEY;
   if (!apiKey) {
-    throw new Error("Google API Key não configurada. Configure em Configurações.");
+    throw new Error("GOOGLE_API_KEY env var não configurada");
   }
   return apiKey;
 }
 
-async function apiRequest<T>(
-  path: string,
-  options: RequestInit = {}
-): Promise<T> {
-  const apiKey = await getApiKey();
+async function apiRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const apiKey = getApiKey();
   const separator = path.includes("?") ? "&" : "?";
   const url = `${BASE_URL}${path}${separator}key=${apiKey}`;
 
@@ -58,76 +63,63 @@ async function apiRequest<T>(
     throw new Error(`Google API error (${response.status}): ${errorText}`);
   }
 
-  // DELETE may return empty body
   const text = await response.text();
   return text ? JSON.parse(text) : ({} as T);
 }
 
-// ===== File Search Stores =====
+// ===== Stores =====
 
 export async function createFileSearchStore(displayName: string): Promise<FileSearchStore> {
   return apiRequest<FileSearchStore>("/fileSearchStores", {
     method: "POST",
-    body: JSON.stringify({
-      displayName,
-    }),
+    body: JSON.stringify({ displayName }),
   });
 }
 
-export async function listFileSearchStores(): Promise<{ fileSearchStores: FileSearchStore[] }> {
-  return apiRequest("/fileSearchStores");
+export async function listFileSearchStores(): Promise<FileSearchStore[]> {
+  const result = await apiRequest<{ fileSearchStores?: FileSearchStore[] }>(
+    "/fileSearchStores?pageSize=100"
+  );
+  return result.fileSearchStores || [];
 }
 
 export async function getFileSearchStore(name: string): Promise<FileSearchStore> {
-  // name can be "fileSearchStores/xxx" or just "xxx"
   const path = name.startsWith("fileSearchStores/") ? name : `fileSearchStores/${name}`;
   return apiRequest<FileSearchStore>(`/${path}`);
 }
 
 export async function deleteFileSearchStore(name: string): Promise<void> {
   const path = name.startsWith("fileSearchStores/") ? name : `fileSearchStores/${name}`;
-  await apiRequest(`/${path}?force=true`, {
-    method: "DELETE",
-  });
+  await apiRequest(`/${path}?force=true`, { method: "DELETE" });
 }
 
 // ===== Documents =====
 
-export async function listDocuments(storeName: string): Promise<{ documents?: FileSearchDocument[] }> {
-  const path = storeName.startsWith("fileSearchStores/") ? storeName : `fileSearchStores/${storeName}`;
-  return apiRequest(`/${path}/documents`);
+export async function listDocuments(storeName: string): Promise<FileSearchDocument[]> {
+  const path = storeName.startsWith("fileSearchStores/")
+    ? storeName
+    : `fileSearchStores/${storeName}`;
+  const result = await apiRequest<{ documents?: FileSearchDocument[] }>(
+    `/${path}/documents?pageSize=100`
+  );
+  return result.documents || [];
 }
 
 export async function deleteDocument(documentName: string): Promise<void> {
   // documentName format: fileSearchStores/xxx/documents/yyy
-  await apiRequest(`/${documentName}`, {
-    method: "DELETE",
-  });
+  await apiRequest(`/${documentName}`, { method: "DELETE" });
 }
 
 // ===== Operations =====
 
-interface Operation {
-  name: string;
-  done?: boolean;
-  error?: { code: number; message: string };
-  response?: { name?: string; [key: string]: unknown };
-  metadata?: Record<string, unknown>;
-}
-
 async function getOperation(operationName: string): Promise<Operation> {
-  // operationName format: "operations/xxx" or full path
   const path = operationName.startsWith("/") ? operationName : `/${operationName}`;
   return apiRequest<Operation>(path);
 }
 
-/**
- * Poll an operation until it completes (or timeout).
- * Returns the resolved document name when done.
- */
 async function waitForOperation(
   operation: Operation,
-  maxWaitMs = 60000,
+  maxWaitMs = 120000,
   pollIntervalMs = 2000
 ): Promise<Operation> {
   const startedAt = Date.now();
@@ -144,16 +136,11 @@ async function waitForOperation(
   if (current.error) {
     throw new Error(`Operation failed: ${current.error.message}`);
   }
-
   return current;
 }
 
-// ===== File Upload =====
+// ===== Upload =====
 
-/**
- * Upload a file directly to a File Search Store using multipart upload.
- * Polls the operation until complete and returns the document name.
- */
 export async function uploadToFileSearchStore(
   storeName: string,
   fileBuffer: Buffer,
@@ -161,10 +148,11 @@ export async function uploadToFileSearchStore(
   mimeType: string,
   customMetadata?: CustomMetadata[]
 ): Promise<{ documentName: string; operationName: string }> {
-  const apiKey = await getApiKey();
-  const path = storeName.startsWith("fileSearchStores/") ? storeName : `fileSearchStores/${storeName}`;
+  const apiKey = getApiKey();
+  const path = storeName.startsWith("fileSearchStores/")
+    ? storeName
+    : `fileSearchStores/${storeName}`;
 
-  // Step 1: Start resumable upload to get upload URL
   const startUrl = `${UPLOAD_URL}/${path}:uploadToFileSearchStore?key=${apiKey}`;
 
   const metadata: { displayName: string; customMetadata?: CustomMetadata[] } = {
@@ -174,6 +162,7 @@ export async function uploadToFileSearchStore(
     metadata.customMetadata = customMetadata;
   }
 
+  // Step 1: Start resumable upload
   const startResponse = await fetch(startUrl, {
     method: "POST",
     headers: {
@@ -196,7 +185,7 @@ export async function uploadToFileSearchStore(
     throw new Error("Missing upload URL from Google response");
   }
 
-  // Step 2: Upload bytes (convert Buffer to Uint8Array for fetch)
+  // Step 2: Upload bytes
   const uploadResponse = await fetch(uploadUrl, {
     method: "POST",
     headers: {
@@ -213,18 +202,92 @@ export async function uploadToFileSearchStore(
   }
 
   const operation: Operation = await uploadResponse.json();
-  console.log("[GoogleAPI] Upload operation started:", operation.name);
+  console.log("[GoogleAPI] Upload operation:", operation.name);
 
-  // Poll until operation completes to get the actual document name
   const completed = await waitForOperation(operation);
   const documentName = completed.response?.name;
 
   if (!documentName) {
-    throw new Error(
-      `Upload completed but no document name returned: ${JSON.stringify(completed)}`
-    );
+    throw new Error(`Upload completed but no document name: ${JSON.stringify(completed)}`);
   }
 
-  console.log("[GoogleAPI] Document created:", documentName);
   return { documentName, operationName: operation.name };
+}
+
+// ===== Chat (generateContent with file_search tool) =====
+
+export interface ChatMessage {
+  role: "user" | "model";
+  text: string;
+}
+
+export interface ChatResponse {
+  text: string;
+  citations?: Array<{ uri?: string; title?: string; text?: string }>;
+}
+
+export async function chatWithStores(
+  storeNames: string[],
+  history: ChatMessage[],
+  model: string = "gemini-2.5-flash"
+): Promise<ChatResponse> {
+  const apiKey = getApiKey();
+  const fullStoreNames = storeNames.map((n) =>
+    n.startsWith("fileSearchStores/") ? n : `fileSearchStores/${n}`
+  );
+
+  const url = `${BASE_URL}/models/${model}:generateContent?key=${apiKey}`;
+
+  const body = {
+    contents: history.map((m) => ({
+      role: m.role,
+      parts: [{ text: m.text }],
+    })),
+    tools: [
+      {
+        file_search: {
+          file_search_store_names: fullStoreNames,
+        },
+      },
+    ],
+  };
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const errText = await response.text();
+    console.error("[GoogleAPI chat] Failed:", errText);
+    throw new Error(`Chat error (${response.status}): ${errText}`);
+  }
+
+  const data = await response.json();
+  const candidate = data.candidates?.[0];
+  const text =
+    candidate?.content?.parts?.map((p: { text?: string }) => p.text || "").join("") || "";
+
+  const citations =
+    candidate?.groundingMetadata?.groundingChunks?.map(
+      (c: { retrievedContext?: { uri?: string; title?: string; text?: string } }) => ({
+        uri: c.retrievedContext?.uri,
+        title: c.retrievedContext?.title,
+        text: c.retrievedContext?.text,
+      })
+    ) || [];
+
+  return { text, citations };
+}
+
+// ===== Health check =====
+
+export async function testConnection(): Promise<{ ok: boolean; storesCount?: number; error?: string }> {
+  try {
+    const stores = await listFileSearchStores();
+    return { ok: true, storesCount: stores.length };
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
 }

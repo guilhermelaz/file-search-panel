@@ -1,152 +1,70 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
 import { isAuthenticated } from "@/lib/auth";
-import { uploadToFileSearchStore, CustomMetadata } from "@/lib/google-file-search";
+import {
+  listDocuments,
+  uploadToFileSearchStore,
+  CustomMetadata,
+} from "@/lib/google-file-search";
 
-// GET /api/files?fileStoreId=xxx&folderId=yyy - Listar arquivos
+// GET /api/files?storeId=xxx -> list documents
 export async function GET(request: NextRequest): Promise<NextResponse> {
+  if (!(await isAuthenticated())) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
   try {
-    const authenticated = await isAuthenticated();
-    if (!authenticated) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const storeId = request.nextUrl.searchParams.get("storeId");
+    if (!storeId) {
+      return NextResponse.json({ error: "storeId required" }, { status: 400 });
     }
-
-    const { searchParams } = new URL(request.url);
-    const fileStoreId = searchParams.get("fileStoreId");
-    const folderId = searchParams.get("folderId");
-
-    if (!fileStoreId) {
-      return NextResponse.json({ error: "fileStoreId is required" }, { status: 400 });
-    }
-
-    const where: { fileStoreId: string; folderId?: string | null } = { fileStoreId };
-
-    if (folderId === "null" || folderId === "") {
-      where.folderId = null;
-    } else if (folderId) {
-      where.folderId = folderId;
-    }
-
-    const files = await prisma.file.findMany({
-      where,
-      orderBy: { createdAt: "desc" },
-    });
-
-    return NextResponse.json(files);
+    const documents = await listDocuments(storeId);
+    return NextResponse.json(documents);
   } catch (error) {
     console.error("[FILES GET]", error);
     return NextResponse.json(
-      { error: "Failed to fetch files", details: String(error) },
+      { error: "Failed to list documents", details: String(error) },
       { status: 500 }
     );
   }
 }
 
-// POST /api/files - Upload arquivo para Google + salvar referência local
+// POST /api/files - upload file. Body: { storeId, name, mimeType, content (base64), metadata? }
 export async function POST(request: NextRequest): Promise<NextResponse> {
+  if (!(await isAuthenticated())) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
   try {
-    const authenticated = await isAuthenticated();
-    if (!authenticated) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
     const body = await request.json();
-    const { name, size, mimeType, folderId, fileStoreId, metadataJson, content } = body;
+    const { storeId, name, mimeType, content, metadata } = body;
 
-    if (!name || !fileStoreId) {
+    if (!storeId || !name || !content) {
       return NextResponse.json(
-        { error: "Name and fileStoreId are required" },
+        { error: "storeId, name and content required" },
         { status: 400 }
       );
     }
 
-    // Buscar o file store para obter googleCorpusId
-    const fileStore = await prisma.fileStore.findUnique({
-      where: { id: fileStoreId },
-    });
+    const fileBuffer = Buffer.from(content, "base64");
 
-    if (!fileStore) {
-      return NextResponse.json({ error: "File store not found" }, { status: 404 });
-    }
-
-    if (!fileStore.googleCorpusId) {
-      return NextResponse.json(
-        { error: "File store não está sincronizado com Google. Recrie o store." },
-        { status: 400 }
-      );
-    }
-
-    // Converter custom metadata para formato do Google
     let googleMetadata: CustomMetadata[] | undefined;
-    if (metadataJson) {
-      try {
-        const parsed = JSON.parse(metadataJson);
-        googleMetadata = Object.entries(parsed).map(([key, value]) => ({
-          key,
-          stringValue: String(value),
-        }));
-      } catch {
-        // ignore invalid JSON
-      }
+    if (metadata && typeof metadata === "object") {
+      googleMetadata = Object.entries(metadata)
+        .filter(([k, v]) => k && v !== "" && v != null)
+        .map(([key, value]) => ({ key, stringValue: String(value) }));
     }
 
-    // Adicionar folder path como metadata para filtragem
-    if (folderId) {
-      const folder = await prisma.folder.findUnique({ where: { id: folderId } });
-      if (folder) {
-        googleMetadata = googleMetadata || [];
-        googleMetadata.push({ key: "_folder", stringValue: folder.path });
-      }
-    }
+    const result = await uploadToFileSearchStore(
+      storeId,
+      fileBuffer,
+      name,
+      mimeType || "application/octet-stream",
+      googleMetadata
+    );
 
-    // Decodificar conteúdo base64
-    let fileBuffer: Buffer;
-    if (content) {
-      fileBuffer = Buffer.from(content, "base64");
-    } else {
-      return NextResponse.json({ error: "File content required" }, { status: 400 });
-    }
-
-    // Upload para Google File Search (espera operação completar)
-    console.log("[FILES POST] Uploading to Google store:", fileStore.googleCorpusId);
-    let googleDocName: string;
-    try {
-      const result = await uploadToFileSearchStore(
-        fileStore.googleCorpusId,
-        fileBuffer,
-        name,
-        mimeType || "application/octet-stream",
-        googleMetadata
-      );
-      googleDocName = result.documentName;
-      console.log("[FILES POST] Document created:", googleDocName);
-    } catch (err) {
-      console.error("[FILES POST] Upload failed:", err);
-      return NextResponse.json(
-        { error: "Falha no upload para Google", details: String(err) },
-        { status: 500 }
-      );
-    }
-
-    // Salvar referência no banco local (apenas metadados, não o conteúdo)
-    const file = await prisma.file.create({
-      data: {
-        name,
-        size: size || fileBuffer.length,
-        mimeType: mimeType || "application/octet-stream",
-        folderId: folderId || null,
-        fileStoreId,
-        metadataJson: metadataJson || null,
-        googleFileId: googleDocName,
-        status: "uploaded",
-      },
-    });
-
-    return NextResponse.json(file, { status: 201 });
+    return NextResponse.json(result, { status: 201 });
   } catch (error) {
     console.error("[FILES POST]", error);
     return NextResponse.json(
-      { error: "Failed to create file", details: String(error) },
+      { error: "Failed to upload file", details: String(error) },
       { status: 500 }
     );
   }

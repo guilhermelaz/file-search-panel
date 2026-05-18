@@ -12,7 +12,7 @@ export default async function StorePage({ params }: StorePageProps) {
 
   return (
     <AppSidebar>
-      <FileManager fileStoreId={id} />
+      <FileManager storeId={id} />
     </AppSidebar>
   );
 }

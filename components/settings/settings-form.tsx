@@ -1,176 +1,87 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Separator } from "@/components/ui/separator";
-import { toast } from "sonner";
-import { Settings, Key, Save } from "lucide-react";
+import { CheckCircle2, XCircle, Loader2, RefreshCw } from "lucide-react";
 
-interface SettingsData {
-  id: string;
-  googleApiKey: string | null;
+interface HealthResult {
+  ok: boolean;
+  storesCount?: number;
+  error?: string;
 }
 
 export function SettingsForm() {
-  const [settings, setSettings] = useState<SettingsData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+  const [result, setResult] = useState<HealthResult | null>(null);
 
-  const [apiKey, setApiKey] = useState("");
-
-  async function fetchSettings() {
+  const test = useCallback(async () => {
+    setLoading(true);
     try {
-      const response = await fetch("/api/settings");
-      if (response.ok) {
-        const data = await response.json();
-        setSettings(data);
-        setApiKey(data.googleApiKey || "");
-      } else {
-        toast.error("Erro ao carregar configurações");
-      }
-    } catch (error) {
-      toast.error("Erro ao carregar configurações");
+      const res = await fetch("/api/health");
+      setResult(await res.json());
+    } catch (err) {
+      setResult({ ok: false, error: String(err) });
     } finally {
       setLoading(false);
     }
-  }
-
-  useEffect(() => {
-    fetchSettings();
   }, []);
 
-  async function handleSave(e: React.FormEvent) {
-    e.preventDefault();
-    setSaving(true);
-
-    try {
-      const response = await fetch("/api/settings", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          googleApiKey: apiKey || null,
-        }),
-      });
-
-      if (response.ok) {
-        toast.success("Configurações salvas com sucesso!");
-        fetchSettings();
-      } else {
-        toast.error("Erro ao salvar configurações");
-      }
-    } catch (error) {
-      toast.error("Erro ao salvar configurações");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  if (loading) {
-    return (
-      <div className="max-w-2xl">
-        <div className="h-8 w-48 bg-muted rounded animate-pulse mb-6" />
-        <Card className="animate-pulse">
-          <CardHeader>
-            <div className="h-6 w-32 bg-muted rounded" />
-            <div className="h-4 w-64 bg-muted rounded" />
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="h-10 bg-muted rounded" />
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
+  useEffect(() => {
+    test();
+  }, [test]);
 
   return (
-    <div className="max-w-2xl">
-      <div className="mb-6">
-        <h1 className="text-3xl font-bold">Configurações</h1>
+    <div className="space-y-6 max-w-2xl">
+      <div>
+        <h1 className="text-3xl font-bold tracking-tight">Configurações</h1>
         <p className="text-muted-foreground">
-          Configure a API Key do Google AI Studio
+          A chave da API é lida da variável de ambiente{" "}
+          <code className="text-xs bg-muted px-1 rounded">GOOGLE_API_KEY</code>.
         </p>
       </div>
 
-      <form onSubmit={handleSave}>
-        <Card>
-          <CardHeader>
-            <div className="flex items-center gap-2">
-              <Settings className="h-5 w-5 text-primary" />
-              <CardTitle>Configurações da API</CardTitle>
-            </div>
-            <CardDescription>
-              Esta credencial é usada para sincronizar arquivos com o Google File Search
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            <div className="space-y-2">
-              <Label htmlFor="apiKey" className="flex items-center gap-2">
-                <Key className="h-4 w-4" />
-                API Key do Google AI Studio
-              </Label>
-              <Input
-                id="apiKey"
-                type="password"
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                placeholder="AIzaSy..."
-              />
-              <p className="text-xs text-muted-foreground">
-                A API Key é necessária para fazer upload de arquivos para o Google File Search.
-                Configure o projeto no{" "}
-                <a
-                  href="https://aistudio.google.com/app/apikey"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-primary hover:underline"
-                >
-                  Google AI Studio
-                </a>.
-              </p>
-            </div>
-
-            <div className="flex justify-end">
-              <Button type="submit" disabled={saving}>
-                <Save className="mr-2 h-4 w-4" />
-                {saving ? "Salvando..." : "Salvar Configurações"}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      </form>
-
-      <Card className="mt-6">
+      <Card>
         <CardHeader>
-          <CardTitle>Informações</CardTitle>
+          <CardTitle>Status da Conexão</CardTitle>
+          <CardDescription>Verifica se o app consegue acessar a Google File Search API.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="text-sm text-muted-foreground space-y-2">
-            <p>
-              <strong>Google File Search</strong> é um serviço do Gemini API que permite
-              criar bases de conhecimento RAG a partir de documentos.
-            </p>
-            <p>
-              Para obter uma API Key:
-            </p>
-            <ol className="list-decimal list-inside space-y-1 ml-4">
-              <li>Acesse o{" "}
-                <a
-                  href="https://aistudio.google.com/app/apikey"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-primary hover:underline"
-                >
-                  Google AI Studio
-                </a>
-              </li>
-              <li>Crie uma nova chave de API</li>
-              <li>Selecione o projeto que deseja usar</li>
-              <li>Copie a chave e cole aqui</li>
-            </ol>
-          </div>
+          {loading ? (
+            <div className="flex items-center gap-2 text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Testando conexão...
+            </div>
+          ) : result?.ok ? (
+            <div className="flex items-start gap-3">
+              <CheckCircle2 className="h-5 w-5 text-green-500 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-medium">Conectado com sucesso</p>
+                <p className="text-sm text-muted-foreground">
+                  {result.storesCount ?? 0} store(s) encontrados na sua conta Google.
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-start gap-3">
+              <XCircle className="h-5 w-5 text-destructive shrink-0 mt-0.5" />
+              <div className="flex-1 min-w-0">
+                <p className="font-medium">Falha na conexão</p>
+                <p className="text-xs text-muted-foreground break-all mt-1 font-mono">
+                  {result?.error || "Erro desconhecido"}
+                </p>
+                <p className="text-xs text-muted-foreground mt-2">
+                  Verifique se a variável <code className="bg-muted px-1 rounded">GOOGLE_API_KEY</code>{" "}
+                  está definida no ambiente do container.
+                </p>
+              </div>
+            </div>
+          )}
+
+          <Button variant="outline" onClick={test} disabled={loading}>
+            <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+            Testar Novamente
+          </Button>
         </CardContent>
       </Card>
     </div>

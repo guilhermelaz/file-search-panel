@@ -1,165 +1,80 @@
-# Deploy VPS - Docker Manual
+# Deploy
+
+App é um cliente puro da Google File Search API — sem banco de dados, sem volume.
 
 ## Requisitos
 - Docker 20.10+
-- VPS com pelo menos 512MB RAM (recomendado 1GB)
-- Porta 3000 disponível
+- Chave da API Google AI Studio: https://aistudio.google.com/apikey
 
-## Deploy Simples (apenas Dockerfile)
+## Variáveis de ambiente
 
-### 1. Envie os arquivos para a VPS
-
-Opção A - Git clone:
-```bash
-git clone <seu-repo>
-cd my-app
-```
-
-Opção B - SCP/rsync da sua máquina local:
-```bash
-rsync -avz --exclude 'node_modules' --exclude '.next' ./my-app/ user@seu-vps:/opt/rag-app/
-ssh user@seu-vps
-cd /opt/rag-app
-```
-
-### 2. Configure as variáveis de ambiente
-```bash
-cp .env.example .env
-nano .env  # ou vim .env
-```
-
-Edite o `.env`:
+Crie um arquivo `.env`:
 ```
 ADMIN_USERNAME=admin
-ADMIN_PASSWORD=sua_senha_segura_aqui
-DATABASE_URL=file:./data/dev.db
+ADMIN_PASSWORD=sua_senha_segura
+SESSION_SECRET=$(openssl rand -hex 32)
+GOOGLE_API_KEY=AIza...
 ```
 
-### 3. Build e Run
+## Deploy com Docker
 
 ```bash
-# Build da imagem (pode demorar alguns minutos)
+# Build
 docker build -t rag-manager .
 
-# Run com volume para persistir dados
-mkdir -p data
-
+# Run
 docker run -d \
   -p 3000:3000 \
-  -v $(pwd)/data:/app/data \
   --env-file .env \
   --name rag-manager \
   --restart unless-stopped \
   rag-manager
-```
 
-### 4. Verifique se funcionou
-```bash
 # Ver logs
 docker logs -f rag-manager
-
-# Deve mostrar:
-# [START] Ensuring data directory exists...
-# [START] Running Prisma migrations...
-# [START] Starting Next.js server...
-# Ready on http://localhost:3000
 ```
 
-### 5. Acesse
-```
-http://seu-ip:3000
-```
+Acesse `http://seu-ip:3000`.
 
----
-
-## Comandos úteis
+## Deploy com Docker Compose
 
 ```bash
-# Ver status
-docker ps
-
-# Ver logs
-docker logs rag-manager
-docker logs -f rag-manager  # follow
-
-# Parar
-docker stop rag-manager
-
-# Remover container
-docker rm -f rag-manager
-
-# Restart
-docker restart rag-manager
-
-# Atualizar (após git pull ou alterações)
-docker rm -f rag-manager
-docker build --no-cache -t rag-manager .
-docker run -d -p 3000:3000 -v $(pwd)/data:/app/data --env-file .env --name rag-manager --restart unless-stopped rag-manager
-
-# Entrar no container
-docker exec -it rag-manager sh
-
-# Backup do banco SQLite
-docker exec rag-manager cat /app/data/dev.db > backup-$(date +%Y%m%d).db
-
-# Ver versão do Prisma no container
-docker exec rag-manager npx prisma --version
-```
-
----
-
-## Com Docker Compose (alternativa)
-
-Se preferir usar compose:
-
-```bash
-# Crie o arquivo .env
-cp .env.example .env
-# Edite o .env
-
-# Suba o serviço
 docker compose up -d --build
-
-# Ver logs
 docker compose logs -f
 ```
 
----
+## Atualizar
 
-## Troubleshooting
-
-### Porta 3000 ocupada
 ```bash
-# Ver o que está usando a porta
-lsof -i :3000
-docker ps | grep 3000
-
-# Use outra porta (ex: 3001)
-docker run -d -p 3001:3000 -v $(pwd)/data:/app/data --env-file .env --name rag-manager --restart unless-stopped rag-manager
-```
-
-### Erro de permissão no data/
-```bash
-# Ajuste permissões
-chmod 777 data
-docker restart rag-manager
-```
-
-### Limpar tudo e recomeçar
-```bash
-docker stop rag-manager
+git pull
+docker compose up -d --build
+# ou:
 docker rm -f rag-manager
-docker rmi rag-manager
-rm -rf data/
-mkdir data
-# Refaça o build e run
+docker build --no-cache -t rag-manager .
+docker run -d -p 3000:3000 --env-file .env --name rag-manager --restart unless-stopped rag-manager
 ```
 
----
+## EasyPanel
 
-## Segurança
+1. App → New Service → App
+2. Source: GitHub do projeto
+3. Build: Dockerfile
+4. Environment: cole todas as variáveis do `.env`
+5. Domains: configure seu domínio (HTTPS automático via Traefik)
 
-- Troque a senha padrão `ADMIN_PASSWORD`
-- Configure firewall: `ufw allow 3000/tcp` (ou porta que escolheu)
-- Use HTTPS via reverse proxy (nginx/caddy/traefik)
-- Faça backups regulares do diretório `data/`
+## Rotas
+
+- `GET  /api/file-stores` — lista stores (do Google)
+- `POST /api/file-stores` — cria store no Google
+- `DELETE /api/file-stores/:id` — deleta store no Google (com `force=true`)
+- `GET  /api/files?storeId=xxx` — lista documentos do store
+- `POST /api/files` — upload arquivo + metadados
+- `DELETE /api/files/:id?storeId=xxx` — deleta documento
+- `POST /api/chat` — chat RAG via `generateContent` + tool `file_search`
+- `GET  /api/health` — testa conexão com a API
+
+## Observações
+
+- Nenhum dado é armazenado localmente. Todo estado vem da API Google em tempo real.
+- Sessão é cookie HMAC assinado com `SESSION_SECRET` (sem persistência server-side).
+- Se mudar `SESSION_SECRET` ou `ADMIN_PASSWORD`, todas as sessões são invalidadas.
