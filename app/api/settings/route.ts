@@ -20,8 +20,9 @@ export async function GET(): Promise<NextResponse> {
 
     return NextResponse.json(settings);
   } catch (error) {
+    console.error("[SETTINGS GET] Error:", error);
     return NextResponse.json(
-      { error: "Failed to fetch settings" },
+      { error: "Failed to fetch settings", details: String(error) },
       { status: 500 }
     );
   }
@@ -38,26 +39,33 @@ export async function PUT(request: NextRequest): Promise<NextResponse> {
     const body = await request.json();
     const { googleApiKey } = body;
 
+    console.log("[SETTINGS PUT] Updating settings, apiKey length:", googleApiKey?.length || 0);
+
     let settings = await prisma.settings.findFirst();
+    console.log("[SETTINGS PUT] Current settings found:", !!settings);
 
     const updateData: { googleApiKey?: string } = {};
     if (googleApiKey !== undefined) updateData.googleApiKey = googleApiKey;
 
     if (settings) {
+      console.log("[SETTINGS PUT] Updating existing settings, id:", settings.id);
       settings = await prisma.settings.update({
         where: { id: settings.id },
         data: updateData,
       });
     } else {
+      console.log("[SETTINGS PUT] Creating new settings");
       settings = await prisma.settings.create({
         data: updateData,
       });
     }
 
+    console.log("[SETTINGS PUT] Success");
     return NextResponse.json(settings);
   } catch (error) {
+    console.error("[SETTINGS PUT] Error:", error);
     return NextResponse.json(
-      { error: "Failed to update settings" },
+      { error: "Failed to update settings", details: String(error) },
       { status: 500 }
     );
   }
