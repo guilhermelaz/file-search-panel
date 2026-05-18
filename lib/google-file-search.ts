@@ -210,13 +210,32 @@ export async function uploadToFileSearchStore(
   console.log("[GoogleAPI] Upload operation:", operation.name);
 
   const completed = await waitForOperation(operation);
-  // Response pode ter documentName diretamente (UploadToFileSearchStoreResponse)
-  const documentName =
-    (completed.response as { documentName?: string })?.documentName ||
-    completed.response?.name;
+  
+  // Extração à prova de falhas:
+  let documentName = "";
+  
+  // 1. Tenta pegar do objeto response
+  if (completed.response) {
+    const resp = completed.response as any;
+    documentName = resp.documentName || resp.name || "";
+  }
+  
+  // 2. Tenta pegar diretamente do root do operation
+  if (!documentName && (completed as any).documentName) {
+    documentName = (completed as any).documentName;
+  }
+  
+  // 3. Fallback absurdo: extrair via regex do JSON se o TS/JS se perder
+  if (!documentName) {
+    const str = JSON.stringify(completed);
+    const match = str.match(/"documentName"\s*:\s*"([^"]+)"/);
+    if (match) {
+      documentName = match[1];
+    }
+  }
 
   if (!documentName) {
-    throw new Error(`Upload completed but no document name: ${JSON.stringify(completed)}`);
+    throw new Error(`Upload completed but no document name. Raw API response: ${JSON.stringify(completed)}`);
   }
 
   return { documentName, operationName: operation.name };
