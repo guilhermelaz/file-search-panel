@@ -17,15 +17,3 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
-    networks:
-      - default
-    labels:
-      - traefik.enable=true
-      - traefik.http.routers.rag-app.rule=Host(`${DOMAIN:-rag.local}`)
-      - traefik.http.routers.rag-app.entrypoints=web
-      - traefik.http.services.rag-app.loadbalancer.server.port=3000
-
-networks:
-  default:
-    external: true
-    name: traefik
