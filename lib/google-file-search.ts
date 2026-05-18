@@ -105,9 +105,26 @@ export async function listDocuments(storeName: string): Promise<FileSearchDocume
   return result.documents || [];
 }
 
-export async function deleteDocument(documentName: string): Promise<void> {
+export async function deleteDocument(documentName: string, retries = 3, delayMs = 2000): Promise<void> {
   // documentName format: fileSearchStores/xxx/documents/yyy
-  await apiRequest(`/${documentName}`, { method: "DELETE" });
+  for (let i = 0; i < retries; i++) {
+    try {
+      await apiRequest(`/${documentName}`, { method: "DELETE" });
+      return; // Success
+    } catch (err) {
+      const errStr = String(err);
+      // If "non-empty" or "FAILED_PRECONDITION", wait and retry (document still processing)
+      if (
+        (errStr.includes("non-empty") || errStr.includes("FAILED_PRECONDITION")) &&
+        i < retries - 1
+      ) {
+        console.log(`[deleteDocument] Retrying in ${delayMs}ms... (${i + 1}/${retries})`);
+        await new Promise((r) => setTimeout(r, delayMs));
+        continue;
+      }
+      throw err; // Re-throw if not retryable or no more retries
+    }
+  }
 }
 
 // ===== Operations =====
@@ -205,7 +222,10 @@ export async function uploadToFileSearchStore(
   console.log("[GoogleAPI] Upload operation:", operation.name);
 
   const completed = await waitForOperation(operation);
-  const documentName = completed.response?.name;
+  // Response pode ter documentName diretamente (UploadToFileSearchStoreResponse)
+  const documentName =
+    (completed.response as { documentName?: string })?.documentName ||
+    completed.response?.name;
 
   if (!documentName) {
     throw new Error(`Upload completed but no document name: ${JSON.stringify(completed)}`);
