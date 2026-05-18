@@ -7,13 +7,19 @@ WORKDIR /app
 
 COPY package.json package-lock.json ./
 COPY prisma ./prisma/
+
+# Install exact versions from package-lock.json
 RUN npm ci
+
+# Verify Prisma version
+RUN npx prisma --version
 
 # Stage 2: Builder
 FROM node:20-alpine AS builder
 WORKDIR /app
 
 COPY --from=deps /app/node_modules ./node_modules
+COPY --from=deps /app/prisma ./prisma
 COPY . .
 
 # Generate Prisma client
@@ -38,8 +44,10 @@ COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
 COPY --from=builder /app/prisma ./prisma
+COPY --from=builder /app/package.json ./package.json
+COPY --from=builder /app/package-lock.json ./package-lock.json
 
-# Create directory for SQLite database (root ownership for volume compatibility)
+# Create directory for SQLite database
 RUN mkdir -p /app/data
 
 # Copy start script
