@@ -11,7 +11,6 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
 import {
   Table,
@@ -63,6 +62,109 @@ interface FileManagerProps {
   storeId: string; // short id, ex: "teste-xxx"
 }
 
+interface ReplaceProgressState {
+  docName: string;
+  percent: number;
+  stage: "lendo" | "enviando" | "finalizando";
+}
+
+function readFileAsBase64(
+  file: File,
+  onProgress?: (ratio: number) => void
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onprogress = (event) => {
+      if (!onProgress) return;
+      if (!event.lengthComputable || event.total <= 0) return;
+      onProgress(event.loaded / event.total);
+    };
+    reader.onload = () => {
+      if (typeof reader.result !== "string") {
+        reject(new Error("Falha ao ler arquivo como base64"));
+        return;
+      }
+      const commaIdx = reader.result.indexOf(",");
+      resolve(commaIdx >= 0 ? reader.result.slice(commaIdx + 1) : reader.result);
+    };
+    reader.onerror = () => reject(reader.error || new Error("Falha ao ler arquivo"));
+    reader.readAsDataURL(file);
+  });
+}
+
+function documentMetadataToObject(doc: Document): Record<string, string> | undefined {
+  if (!doc.customMetadata || doc.customMetadata.length === 0) {
+    return undefined;
+  }
+
+  const metadata: Record<string, string> = {};
+  for (const item of doc.customMetadata) {
+    if (!item?.key) continue;
+    const value =
+      item.stringValue ??
+      (item.numericValue != null ? String(item.numericValue) : undefined);
+    if (typeof value === "string" && value.length > 0) {
+      metadata[item.key] = value;
+    }
+  }
+
+  return Object.keys(metadata).length > 0 ? metadata : undefined;
+}
+
+function metadataObjectToFields(
+  metadata?: Record<string, string>
+): Array<{ key: string; value: string }> {
+  if (!metadata) {
+    return [{ key: "", value: "" }];
+  }
+  const fields = Object.entries(metadata).map(([key, value]) => ({ key, value }));
+  return fields.length > 0 ? fields : [{ key: "", value: "" }];
+}
+
+function putDocumentReplaceWithProgress(
+  url: string,
+  body: unknown,
+  onUploadProgress: (ratio: number) => void
+): Promise<{ ok: boolean; status: number; raw: string; payload: unknown }> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("PUT", url, true);
+    xhr.setRequestHeader("Content-Type", "application/json");
+
+    xhr.upload.onprogress = (event) => {
+      if (!event.lengthComputable || event.total <= 0) return;
+      onUploadProgress(event.loaded / event.total);
+    };
+
+    xhr.onload = () => {
+      const raw = xhr.responseText || "";
+      let payload: unknown = undefined;
+      if (raw) {
+        try {
+          payload = JSON.parse(raw);
+        } catch {
+          payload = raw;
+        }
+      }
+      resolve({
+        ok: xhr.status >= 200 && xhr.status < 300,
+        status: xhr.status,
+        raw,
+        payload,
+      });
+    };
+
+    xhr.onerror = () => reject(new Error("Falha de rede durante substituição"));
+    xhr.onabort = () => reject(new Error("Substituição cancelada"));
+
+    try {
+      xhr.send(JSON.stringify(body));
+    } catch (error) {
+      reject(error instanceof Error ? error : new Error(String(error)));
+    }
+  });
+}
+
 export function FileManager({ storeId }: FileManagerProps) {
   const [storeInfo, setStoreInfo] = useState<StoreInfo | null>(null);
   const [docs, setDocs] = useState<Document[]>([]);
@@ -76,6 +178,9 @@ export function FileManager({ storeId }: FileManagerProps) {
   const [uploading, setUploading] = useState(false);
   const [deletingSelected, setDeletingSelected] = useState(false);
   const [selectedDocNames, setSelectedDocNames] = useState<string[]>([]);
+  const [replaceTarget, setReplaceTarget] = useState<Document | null>(null);
+  const [replacingDocName, setReplacingDocName] = useState<string | null>(null);
+  const [replaceProgress, setReplaceProgress] = useState<ReplaceProgressState | null>(null);
   const [docsReturnLimit, setDocsReturnLimit] = useState<string>(() => {
     if (typeof window === "undefined") return "all";
     try {
@@ -163,45 +268,171 @@ export function FileManager({ storeId }: FileManagerProps) {
     setSelectedDocNames([]);
   }
 
+  function getMetadataFromFormFields(): Record<string, string> | undefined {
+    const meta: Record<string, string> = {};
+    metadata.forEach((m) => {
+      if (m.key && m.value) {
+        meta[m.key] = m.value;
+      }
+    });
+    return Object.keys(meta).length > 0 ? meta : undefined;
+  }
+
+  function resetUploadFormState() {
+    setFile(null);
+    setMetadata([{ key: "", value: "" }]);
+  }
+
+  function handleUploadModalOpenChange(nextOpen: boolean) {
+    setUploadOpen(nextOpen);
+    if (!nextOpen && !uploading) {
+      setReplaceTarget(null);
+      resetUploadFormState();
+    }
+  }
+
+  function openUploadModal() {
+    setReplaceTarget(null);
+    resetUploadFormState();
+    setUploadOpen(true);
+  }
+
+  function openReplaceModal(doc: Document) {
+    setReplaceTarget(doc);
+    setFile(null);
+    setMetadata(metadataObjectToFields(documentMetadataToObject(doc)));
+    setUploadOpen(true);
+  }
+
   async function handleUpload(e: React.FormEvent) {
     e.preventDefault();
-    if (!file) return;
+    const selectedFile = file;
+    if (!selectedFile) return;
+
+    const targetDoc = replaceTarget;
     setUploading(true);
     try {
-      // Read as base64
-      const buffer = await file.arrayBuffer();
-      const b64 = Buffer.from(buffer).toString("base64");
+      const metadataFromForm = getMetadataFromFormFields();
 
-      const meta: Record<string, string> = {};
-      metadata.forEach((m) => {
-        if (m.key && m.value) meta[m.key] = m.value;
-      });
+      if (targetDoc) {
+        setReplacingDocName(targetDoc.name);
+        setReplaceProgress({
+          docName: targetDoc.name,
+          percent: 0,
+          stage: "lendo",
+        });
 
-      const res = await fetch("/api/files", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          storeId,
-          name: file.name,
-          mimeType: file.type || "application/octet-stream",
-          content: b64,
-          metadata: Object.keys(meta).length > 0 ? meta : undefined,
-        }),
-      });
+        const content = await readFileAsBase64(selectedFile, (ratio) => {
+          const percent = Math.min(30, Math.max(1, Math.round(ratio * 30)));
+          setReplaceProgress({
+            docName: targetDoc.name,
+            percent,
+            stage: "lendo",
+          });
+        });
+        const docId = shortDocId(targetDoc.name);
 
-      if (!res.ok) {
-        const err = await res.text();
-        throw new Error(err);
+        setReplaceProgress({
+          docName: targetDoc.name,
+          percent: 35,
+          stage: "enviando",
+        });
+
+        const response = await putDocumentReplaceWithProgress(
+          `/api/files/${docId}?storeId=${storeId}`,
+          {
+            name: selectedFile.name,
+            mimeType:
+              selectedFile.type || targetDoc.mimeType || "application/octet-stream",
+            content,
+            metadata: metadataFromForm,
+          },
+          (ratio) => {
+            const percent = Math.min(95, Math.max(35, 35 + Math.round(ratio * 60)));
+            setReplaceProgress({
+              docName: targetDoc.name,
+              percent,
+              stage: "enviando",
+            });
+          }
+        );
+
+        setReplaceProgress({
+          docName: targetDoc.name,
+          percent: 98,
+          stage: "finalizando",
+        });
+
+        if (!response.ok) {
+          if (
+            response.payload &&
+            typeof response.payload === "object" &&
+            "error" in response.payload
+          ) {
+            throw new Error(
+              String((response.payload as { error: string }).error)
+            );
+          }
+          throw new Error(response.raw || "Falha ao substituir arquivo");
+        }
+
+        if (
+          response.payload &&
+          typeof response.payload === "object" &&
+          "success" in response.payload &&
+          (response.payload as { success?: boolean }).success === false
+        ) {
+          toast.error("Upload concluído, mas não foi possível apagar o arquivo antigo.");
+        } else {
+          toast.success("Arquivo substituído com sucesso!");
+        }
+
+        setReplaceProgress({
+          docName: targetDoc.name,
+          percent: 100,
+          stage: "finalizando",
+        });
+
+        setSelectedDocNames((current) =>
+          current.filter((name) => name !== targetDoc.name)
+        );
+      } else {
+        const b64 = await readFileAsBase64(selectedFile);
+
+        const res = await fetch("/api/files", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            storeId,
+            name: selectedFile.name,
+            mimeType: selectedFile.type || "application/octet-stream",
+            content: b64,
+            metadata: metadataFromForm,
+          }),
+        });
+
+        if (!res.ok) {
+          const err = await res.text();
+          throw new Error(err);
+        }
+        toast.success("Arquivo enviado com sucesso!");
       }
-      toast.success("Arquivo enviado com sucesso!");
+
       setUploadOpen(false);
-      setFile(null);
-      setMetadata([{ key: "", value: "" }]);
+      setReplaceTarget(null);
+      resetUploadFormState();
       void fetchAll();
-    } catch (err) {
-      toast.error("Erro no upload: " + String(err));
+    } catch (error) {
+      if (targetDoc) {
+        console.error("[REPLACE_DOCUMENT]", error);
+        toast.error("Erro ao substituir: " + String(error));
+      } else {
+        toast.error("Erro no upload: " + String(error));
+      }
     } finally {
       setUploading(false);
+      setReplacingDocName(null);
+      setReplaceProgress(null);
     }
   }
 
@@ -272,6 +503,8 @@ export function FileManager({ storeId }: FileManagerProps) {
   const selectedDocNamesSet = new Set(selectedDocNames);
   const allSelected = docs.length > 0 && docs.every((doc) => selectedDocNamesSet.has(doc.name));
   const selectedCount = selectedDocNames.length;
+  const replaceTargetLabel =
+    replaceTarget?.displayName || (replaceTarget ? shortDocId(replaceTarget.name) : "");
 
   return (
     <div className="p-6 space-y-6">
@@ -317,20 +550,20 @@ export function FileManager({ storeId }: FileManagerProps) {
             <MessageSquare className="mr-2 h-4 w-4" />
             Chat
           </Button>
-          <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
-            <DialogTrigger
-              render={
-                <Button>
-                  <Upload className="mr-2 h-4 w-4" />
-                  Upload
-                </Button>
-              }
-            />
+          <Dialog open={uploadOpen} onOpenChange={handleUploadModalOpenChange}>
+            <Button onClick={openUploadModal}>
+              <Upload className="mr-2 h-4 w-4" />
+              Upload
+            </Button>
             <DialogContent className="max-w-lg">
               <DialogHeader>
-                <DialogTitle>Upload de arquivo</DialogTitle>
+                <DialogTitle>
+                  {replaceTarget ? "Substituir arquivo" : "Upload de arquivo"}
+                </DialogTitle>
                 <DialogDescription>
-                  O arquivo será enviado direto ao Google File Search com seus metadados.
+                  {replaceTarget
+                    ? `O novo arquivo será enviado e, em seguida, o antigo será removido (${replaceTargetLabel}).`
+                    : "O arquivo será enviado direto ao Google File Search com seus metadados."}
                 </DialogDescription>
               </DialogHeader>
               <form onSubmit={handleUpload}>
@@ -391,7 +624,13 @@ export function FileManager({ storeId }: FileManagerProps) {
                     Cancelar
                   </Button>
                   <Button type="submit" disabled={uploading || !file}>
-                    {uploading ? "Enviando..." : "Enviar"}
+                    {uploading
+                      ? replaceTarget
+                        ? "Substituindo..."
+                        : "Enviando..."
+                      : replaceTarget
+                      ? "Substituir"
+                      : "Enviar"}
                   </Button>
                 </DialogFooter>
               </form>
@@ -432,7 +671,7 @@ export function FileManager({ storeId }: FileManagerProps) {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead className="w-10">
+                <TableHead className="w-24">
                   <input
                     type="checkbox"
                     checked={allSelected}
@@ -453,13 +692,43 @@ export function FileManager({ storeId }: FileManagerProps) {
               {docs.map((doc) => (
                 <TableRow key={doc.name}>
                   <TableCell>
-                    <input
-                      type="checkbox"
-                      checked={selectedDocNamesSet.has(doc.name)}
-                      onChange={(event) => toggleDocSelection(doc.name, event.target.checked)}
-                      aria-label={`Selecionar ${doc.displayName || shortDocId(doc.name)}`}
-                      className="h-4 w-4 cursor-pointer accent-primary"
-                    />
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={selectedDocNamesSet.has(doc.name)}
+                        onChange={(event) => toggleDocSelection(doc.name, event.target.checked)}
+                        aria-label={`Selecionar ${doc.displayName || shortDocId(doc.name)}`}
+                        className="h-4 w-4 cursor-pointer accent-primary"
+                      />
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8"
+                        title="Substituir arquivo"
+                        disabled={replacingDocName !== null}
+                        onClick={() => openReplaceModal(doc)}
+                      >
+                        <Upload className="h-4 w-4" />
+                      </Button>
+                    </div>
+                    {replacingDocName === doc.name && replaceProgress?.docName === doc.name ? (
+                      <div className="mt-1 w-24">
+                        <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
+                          <div
+                            className="h-full bg-primary transition-[width] duration-200 ease-linear"
+                            style={{ width: `${replaceProgress.percent}%` }}
+                          />
+                        </div>
+                        <p className="mt-1 text-[10px] leading-none text-muted-foreground">
+                          {replaceProgress.stage === "lendo"
+                            ? "Lendo"
+                            : replaceProgress.stage === "enviando"
+                            ? "Enviando"
+                            : "Finalizando"}{" "}
+                          {replaceProgress.percent}%
+                        </p>
+                      </div>
+                    ) : null}
                   </TableCell>
                   <TableCell className="font-medium">
                     <div className="flex items-center gap-2">
@@ -496,6 +765,12 @@ export function FileManager({ storeId }: FileManagerProps) {
                       size="icon"
                       className="h-8 w-8"
                       onClick={() => handleDelete(doc)}
+                      disabled={replacingDocName === doc.name}
+                      title={
+                        replacingDocName === doc.name
+                          ? "Substituindo arquivo..."
+                          : "Apagar arquivo"
+                      }
                     >
                       <Trash2 className="h-4 w-4 text-destructive" />
                     </Button>
