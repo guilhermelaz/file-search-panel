@@ -1,5 +1,6 @@
 const BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 const UPLOAD_URL = "https://generativelanguage.googleapis.com/upload/v1beta";
+const MAX_PAGE_SIZE = 20;
 
 export interface FileSearchStore {
   name: string;
@@ -34,6 +35,7 @@ interface Operation {
   error?: { code: number; message: string };
   response?: { name?: string; [key: string]: unknown };
   metadata?: Record<string, unknown>;
+  documentName?: string;
 }
 
 function getApiKey(): string {
@@ -67,6 +69,24 @@ async function apiRequest<T>(path: string, options: RequestInit = {}): Promise<T
   return text ? JSON.parse(text) : ({} as T);
 }
 
+function normalizeMaxResults(maxResults?: number): number | undefined {
+  if (typeof maxResults !== "number" || !Number.isFinite(maxResults)) {
+    return undefined;
+  }
+  const normalized = Math.floor(maxResults);
+  return normalized > 0 ? normalized : undefined;
+}
+
+function buildPagedPath(
+  basePath: string,
+  pageSize: number,
+  pageToken?: string
+): string {
+  const separator = basePath.includes("?") ? "&" : "?";
+  const tokenPart = pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : "";
+  return `${basePath}${separator}pageSize=${pageSize}${tokenPart}`;
+}
+
 // ===== Stores =====
 
 export async function createFileSearchStore(displayName: string): Promise<FileSearchStore> {
@@ -76,11 +96,31 @@ export async function createFileSearchStore(displayName: string): Promise<FileSe
   });
 }
 
-export async function listFileSearchStores(): Promise<FileSearchStore[]> {
-  const result = await apiRequest<{ fileSearchStores?: FileSearchStore[] }>(
-    "/fileSearchStores?pageSize=20"
-  );
-  return result.fileSearchStores || [];
+export async function listFileSearchStores(maxResults?: number): Promise<FileSearchStore[]> {
+  const normalizedMaxResults = normalizeMaxResults(maxResults);
+  const stores: FileSearchStore[] = [];
+  let pageToken: string | undefined;
+
+  while (true) {
+    const remaining = normalizedMaxResults
+      ? normalizedMaxResults - stores.length
+      : MAX_PAGE_SIZE;
+    if (remaining <= 0) break;
+
+    const pageSize = Math.min(MAX_PAGE_SIZE, remaining);
+    const path = buildPagedPath("/fileSearchStores", pageSize, pageToken);
+    const result = await apiRequest<{
+      fileSearchStores?: FileSearchStore[];
+      nextPageToken?: string;
+    }>(path);
+
+    stores.push(...(result.fileSearchStores || []));
+
+    pageToken = result.nextPageToken;
+    if (!pageToken) break;
+  }
+
+  return stores;
 }
 
 export async function getFileSearchStore(name: string): Promise<FileSearchStore> {
@@ -95,14 +135,37 @@ export async function deleteFileSearchStore(name: string): Promise<void> {
 
 // ===== Documents =====
 
-export async function listDocuments(storeName: string): Promise<FileSearchDocument[]> {
+export async function listDocuments(
+  storeName: string,
+  maxResults?: number
+): Promise<FileSearchDocument[]> {
   const path = storeName.startsWith("fileSearchStores/")
     ? storeName
     : `fileSearchStores/${storeName}`;
-  const result = await apiRequest<{ documents?: FileSearchDocument[] }>(
-    `/${path}/documents?pageSize=20`
-  );
-  return result.documents || [];
+  const normalizedMaxResults = normalizeMaxResults(maxResults);
+  const documents: FileSearchDocument[] = [];
+  let pageToken: string | undefined;
+
+  while (true) {
+    const remaining = normalizedMaxResults
+      ? normalizedMaxResults - documents.length
+      : MAX_PAGE_SIZE;
+    if (remaining <= 0) break;
+
+    const pageSize = Math.min(MAX_PAGE_SIZE, remaining);
+    const pagedPath = buildPagedPath(`/${path}/documents`, pageSize, pageToken);
+    const result = await apiRequest<{
+      documents?: FileSearchDocument[];
+      nextPageToken?: string;
+    }>(pagedPath);
+
+    documents.push(...(result.documents || []));
+
+    pageToken = result.nextPageToken;
+    if (!pageToken) break;
+  }
+
+  return documents;
 }
 
 export async function getDocument(documentName: string): Promise<FileSearchDocument> {
@@ -216,13 +279,13 @@ export async function uploadToFileSearchStore(
   
   // 1. Tenta pegar do objeto response
   if (completed.response) {
-    const resp = completed.response as any;
+    const resp = completed.response as { documentName?: string; name?: string };
     documentName = resp.documentName || resp.name || "";
   }
   
   // 2. Tenta pegar diretamente do root do operation
-  if (!documentName && (completed as any).documentName) {
-    documentName = (completed as any).documentName;
+  if (!documentName && typeof completed.documentName === "string") {
+    documentName = completed.documentName;
   }
   
   // 3. Fallback absurdo: extrair via regex do JSON se o TS/JS se perder
@@ -253,19 +316,12 @@ export interface ChatResponse {
   citations?: Array<{ uri?: string; title?: string; text?: string }>;
 }
 
-export async function chatWithStores(
-  storeNames: string[],
-  history: ChatMessage[],
-  model: string = "gemini-2.5-flash"
-): Promise<ChatResponse> {
-  const apiKey = getApiKey();
+function buildChatRequestBody(storeNames: string[], history: ChatMessage[]) {
   const fullStoreNames = storeNames.map((n) =>
     n.startsWith("fileSearchStores/") ? n : `fileSearchStores/${n}`
   );
 
-  const url = `${BASE_URL}/models/${model}:generateContent?key=${apiKey}`;
-
-  const body = {
+  return {
     contents: history.map((m) => ({
       role: m.role,
       parts: [{ text: m.text }],
@@ -278,6 +334,17 @@ export async function chatWithStores(
       },
     ],
   };
+}
+
+export async function chatWithStores(
+  storeNames: string[],
+  history: ChatMessage[],
+  model: string = "gemini-2.5-flash"
+): Promise<ChatResponse> {
+  const apiKey = getApiKey();
+
+  const url = `${BASE_URL}/models/${model}:generateContent?key=${apiKey}`;
+  const body = buildChatRequestBody(storeNames, history);
 
   const response = await fetch(url, {
     method: "POST",
@@ -306,6 +373,37 @@ export async function chatWithStores(
     ) || [];
 
   return { text, citations };
+}
+
+export async function chatWithStoresStream(
+  storeNames: string[],
+  history: ChatMessage[],
+  model: string = "gemini-2.5-flash"
+): Promise<Response> {
+  const apiKey = getApiKey();
+  const url = `${BASE_URL}/models/${model}:streamGenerateContent?alt=sse&key=${apiKey}`;
+  const body = buildChatRequestBody(storeNames, history);
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "text/event-stream",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const errText = await response.text();
+    console.error("[GoogleAPI chat stream] Failed:", errText);
+    throw new Error(`Chat stream error (${response.status}): ${errText}`);
+  }
+
+  if (!response.body) {
+    throw new Error("Chat stream sem body");
+  }
+
+  return response;
 }
 
 // ===== Models =====

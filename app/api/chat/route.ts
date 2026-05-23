@@ -1,14 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isAuthenticated } from "@/lib/auth";
-import { chatWithStores, ChatMessage } from "@/lib/google-file-search";
+import {
+  chatWithStores,
+  chatWithStoresStream,
+  ChatMessage,
+} from "@/lib/google-file-search";
 
-export async function POST(request: NextRequest): Promise<NextResponse> {
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+export async function POST(request: NextRequest): Promise<Response> {
   if (!(await isAuthenticated())) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   try {
     const body = await request.json();
-    const { storeIds, messages, model } = body;
+    const { storeIds, messages, model, stream } = body;
 
     if (!Array.isArray(storeIds) || storeIds.length === 0) {
       return NextResponse.json({ error: "storeIds required" }, { status: 400 });
@@ -21,6 +28,24 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       role: m.role === "model" ? "model" : "user",
       text: String(m.text || ""),
     }));
+
+    if (stream === true) {
+      const upstream = await chatWithStoresStream(
+        storeIds,
+        history,
+        typeof model === "string" ? model : "gemini-2.5-flash"
+      );
+
+      return new Response(upstream.body, {
+        status: 200,
+        headers: {
+          "Content-Type": "text/event-stream; charset=utf-8",
+          "Cache-Control": "no-cache, no-transform",
+          Connection: "keep-alive",
+          "X-Content-Type-Options": "nosniff",
+        },
+      });
+    }
 
     const response = await chatWithStores(
       storeIds,

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -25,6 +25,9 @@ import { toast } from "sonner";
 import { FolderOpen, Plus, Trash2, Copy, FileText } from "lucide-react";
 import { shortStoreId, formatBytes, formatDate } from "@/lib/google-utils";
 
+const STORES_RETURN_LIMIT_KEY = "rag-stores-return-limit";
+const STORES_RETURN_LIMIT_OPTIONS = ["all", "20", "50", "100", "200"] as const;
+
 interface FileStore {
   name: string; // fileSearchStores/xxx
   displayName: string;
@@ -41,11 +44,29 @@ export function FileStoresList() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [newName, setNewName] = useState("");
   const [creating, setCreating] = useState(false);
+  const [returnLimit, setReturnLimit] = useState<string>(() => {
+    if (typeof window === "undefined") return "all";
+    try {
+      const stored = window.localStorage.getItem(STORES_RETURN_LIMIT_KEY);
+      if (
+        stored &&
+        STORES_RETURN_LIMIT_OPTIONS.includes(
+          stored as (typeof STORES_RETURN_LIMIT_OPTIONS)[number]
+        )
+      ) {
+        return stored;
+      }
+    } catch {
+      // Ignore localStorage failures
+    }
+    return "all";
+  });
 
-  async function fetchStores() {
+  const fetchStores = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch("/api/file-stores");
+      const query = returnLimit === "all" ? "" : `?limit=${encodeURIComponent(returnLimit)}`;
+      const res = await fetch(`/api/file-stores${query}`);
       if (!res.ok) throw new Error(await res.text());
       setStores(await res.json());
     } catch (err) {
@@ -53,11 +74,22 @@ export function FileStoresList() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [returnLimit]);
 
   useEffect(() => {
-    fetchStores();
-  }, []);
+    try {
+      window.localStorage.setItem(STORES_RETURN_LIMIT_KEY, returnLimit);
+    } catch {
+      // Ignore localStorage failures
+    }
+  }, [returnLimit]);
+
+  useEffect(() => {
+    const timerId = window.setTimeout(() => {
+      void fetchStores();
+    }, 0);
+    return () => window.clearTimeout(timerId);
+  }, [fetchStores]);
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
@@ -72,7 +104,7 @@ export function FileStoresList() {
       toast.success("Store criado!");
       setDialogOpen(false);
       setNewName("");
-      fetchStores();
+      void fetchStores();
     } catch (err) {
       toast.error("Erro ao criar: " + String(err));
     } finally {
@@ -92,7 +124,7 @@ export function FileStoresList() {
       const res = await fetch(`/api/file-stores/${id}`, { method: "DELETE" });
       if (!res.ok) throw new Error(await res.text());
       toast.success("Store deletado!");
-      fetchStores();
+      void fetchStores();
     } catch (err) {
       toast.error("Erro ao deletar: " + String(err));
     }
@@ -131,51 +163,74 @@ export function FileStoresList() {
           <p className="text-muted-foreground">
             Stores do Google File Search (sincronizado em tempo real)
           </p>
+          <p className="text-xs text-muted-foreground mt-1">
+            {stores.length} store(s) carregado(s)
+          </p>
         </div>
-        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-          <DialogTrigger
-            render={
-              <Button>
-                <Plus className="mr-2 h-4 w-4" />
-                Novo Store
-              </Button>
-            }
-          />
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Criar File Store</DialogTitle>
-              <DialogDescription>
-                O store será criado no Google File Search.
-              </DialogDescription>
-            </DialogHeader>
-            <form onSubmit={handleCreate}>
-              <div className="space-y-4 py-4">
-                <div className="space-y-2">
-                  <Label htmlFor="name">Nome (display)</Label>
-                  <Input
-                    id="name"
-                    value={newName}
-                    onChange={(e) => setNewName(e.target.value)}
-                    placeholder="Meu Store"
-                    required
-                  />
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2">
+            <Label htmlFor="stores-return-limit" className="text-xs text-muted-foreground">
+              Retorno
+            </Label>
+            <select
+              id="stores-return-limit"
+              value={returnLimit}
+              onChange={(e) => setReturnLimit(e.target.value)}
+              className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+              disabled={loading}
+            >
+              {STORES_RETURN_LIMIT_OPTIONS.map((option) => (
+                <option key={option} value={option}>
+                  {option === "all" ? "Todos" : option}
+                </option>
+              ))}
+            </select>
+          </div>
+          <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+            <DialogTrigger
+              render={
+                <Button>
+                  <Plus className="mr-2 h-4 w-4" />
+                  Novo Store
+                </Button>
+              }
+            />
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Criar File Store</DialogTitle>
+                <DialogDescription>
+                  O store será criado no Google File Search.
+                </DialogDescription>
+              </DialogHeader>
+              <form onSubmit={handleCreate}>
+                <div className="space-y-4 py-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="name">Nome (display)</Label>
+                    <Input
+                      id="name"
+                      value={newName}
+                      onChange={(e) => setNewName(e.target.value)}
+                      placeholder="Meu Store"
+                      required
+                    />
+                  </div>
                 </div>
-              </div>
-              <DialogFooter>
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => setDialogOpen(false)}
-                >
-                  Cancelar
-                </Button>
-                <Button type="submit" disabled={creating}>
-                  {creating ? "Criando..." : "Criar"}
-                </Button>
-              </DialogFooter>
-            </form>
-          </DialogContent>
-        </Dialog>
+                <DialogFooter>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setDialogOpen(false)}
+                  >
+                    Cancelar
+                  </Button>
+                  <Button type="submit" disabled={creating}>
+                    {creating ? "Criando..." : "Criar"}
+                  </Button>
+                </DialogFooter>
+              </form>
+            </DialogContent>
+          </Dialog>
+        </div>
       </div>
 
       {stores.length === 0 ? (
