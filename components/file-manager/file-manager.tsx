@@ -525,24 +525,6 @@ export function FileManager({ storeId }: FileManagerProps) {
           </div>
         </div>
         <div className="flex gap-2">
-          <div className="flex items-center gap-2">
-            <Label htmlFor="docs-return-limit" className="text-xs text-muted-foreground">
-              Retorno
-            </Label>
-            <select
-              id="docs-return-limit"
-              value={docsReturnLimit}
-              onChange={(e) => setDocsReturnLimit(e.target.value)}
-              className="h-9 rounded-md border border-input bg-background px-2 text-sm"
-              disabled={loading}
-            >
-              {DOCS_RETURN_LIMIT_OPTIONS.map((option) => (
-                <option key={option} value={option}>
-                  {option === "all" ? "Todos" : option}
-                </option>
-              ))}
-            </select>
-          </div>
           <Button variant="outline" size="icon" onClick={() => void fetchAll()} title="Atualizar">
             <RefreshCw className="h-4 w-4" />
           </Button>
@@ -700,16 +682,6 @@ export function FileManager({ storeId }: FileManagerProps) {
                         aria-label={`Selecionar ${doc.displayName || shortDocId(doc.name)}`}
                         className="h-4 w-4 cursor-pointer accent-primary"
                       />
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8"
-                        title="Substituir arquivo"
-                        disabled={replacingDocName !== null}
-                        onClick={() => openReplaceModal(doc)}
-                      >
-                        <Upload className="h-4 w-4" />
-                      </Button>
                     </div>
                     {replacingDocName === doc.name && replaceProgress?.docName === doc.name ? (
                       <div className="mt-1 w-24">
@@ -788,6 +760,25 @@ export function FileManager({ storeId }: FileManagerProps) {
         storeId={storeId}
         storeName={storeInfo?.displayName || storeId}
       />
+
+      <div className="fixed bottom-4 right-4 flex items-center gap-2 bg-background/80 backdrop-blur-sm border border-input rounded-md px-3 py-1.5 shadow-md z-50">
+        <Label htmlFor="docs-return-limit" className="text-xs text-muted-foreground">
+          Retorno
+        </Label>
+        <select
+          id="docs-return-limit"
+          value={docsReturnLimit}
+          onChange={(e) => setDocsReturnLimit(e.target.value)}
+          className="h-7 rounded border-0 bg-transparent px-1 text-sm focus:outline-none"
+          disabled={loading}
+        >
+          {DOCS_RETURN_LIMIT_OPTIONS.map((option) => (
+            <option key={option} value={option}>
+              {option === "all" ? "Todos" : option}
+            </option>
+          ))}
+        </select>
+      </div>
     </div>
   );
 }
